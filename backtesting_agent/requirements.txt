@@ -1,0 +1,25 @@
+# CCAR Backtesting Agent — dependencies
+# Install with: uv pip install -r backtesting_agent/requirements.txt
+# Then install the local smolagents repo: uv pip install -e ".[litellm]"
+
+# ── LLM framework ─────────────────────────────────────────────────────────────
+litellm
+
+# ── Data (large parquet files read/aggregated in Polars, results in pandas) ───
+polars
+pyarrow          # parquet backend used by both polars and pandas
+pandas
+openpyxl         # Excel (.xlsx) support for pandas
+
+# ── Numerics & ML metrics ─────────────────────────────────────────────────────
+numpy
+scipy
+scikit-learn
+
+# ── Visualization ─────────────────────────────────────────────────────────────
+matplotlib
+seaborn
+
+# ── Config & environment ──────────────────────────────────────────────────────
+python-dotenv    # loads .env file
+pyyaml           # reads config.yaml

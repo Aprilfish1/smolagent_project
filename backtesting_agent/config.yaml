@@ -1,0 +1,44 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CCAR Backtesting Agent — Column Configuration
+#
+# Define your target variables here.  For each model target, give it a short
+# name and map it to the actual column name and predicted column name in your
+# dataset.  The agent will know these mappings automatically — you can refer
+# to them by their short name in plain English (e.g. "analyze PD").
+# ─────────────────────────────────────────────────────────────────────────────
+
+target_variables:
+  # Short name  →  actual column name in your CSV/Excel
+  #              →  predicted column name in your CSV/Excel
+
+  PD:                          # Probability of Default
+    actual:    actual_pd
+    predicted: predicted_pd
+
+  LGD:                         # Loss Given Default
+    actual:    actual_lgd
+    predicted: predicted_lgd
+
+  EAD:                         # Exposure at Default
+    actual:    actual_ead
+    predicted: predicted_ead
+
+  NCO:                         # Net Charge-Off Rate  (rename/remove as needed)
+    actual:    actual_loss
+    predicted: predicted_loss
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Default segmentation columns
+# The agent will suggest these when the user asks to "break down by segment"
+# without being more specific.
+# ─────────────────────────────────────────────────────────────────────────────
+default_group_by_columns:
+  - product_type
+  - risk_segment
+  - geography
+  - vintage_year
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Output directory for all generated charts
+# ─────────────────────────────────────────────────────────────────────────────
+output_dir: ./backtesting_output
