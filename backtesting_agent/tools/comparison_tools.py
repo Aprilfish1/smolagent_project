@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from smolagents import tool
 from .data_tools import get_df
-from .metrics_tools import _compute_metrics
+from .metrics_tools import _compute_account_level as _compute_metrics
 
 sns.set_theme(style="whitegrid", palette="muted")
 

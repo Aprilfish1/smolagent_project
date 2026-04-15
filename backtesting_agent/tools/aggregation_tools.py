@@ -1,18 +1,12 @@
 """
-Pre-aggregation tools for large account-level parquet datasets.
+Credit card balance sheet backtesting — aggregation tool.
 
-Strategy
---------
-- Read and aggregate entirely in Polars (fast, memory-efficient, lazy evaluation)
-- Convert the compact aggregated result to pandas and store it by name
-- All downstream tools (metrics, viz, comparison) work on the stored pandas DataFrame
+Single entry point: aggregate_credit_card()
 
-Supported aggregation dimensions
----------------------------------
-  aggregate_by_statement_month  – group by a statement/performance date column
-  aggregate_by_vintage          – group by origination cohort date
-  aggregate_by_feature_bins     – bin a continuous column then group
-  aggregate_parquet             – arbitrary custom group-by on any columns
+Supports all analysis dimensions (statement_month, vintage, horizon,
+performance_month, feature_bins) with correct domain logic:
+  - flow  (Payment, PurchaseVolume): sum across ALL horizons
+  - stock (EOS): filter to MAX horizon per statement_month, then sum
 """
 
 from __future__ import annotations
@@ -28,394 +22,288 @@ from .data_tools import _store
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _read_lazy(file_path: str, columns: list[str]) -> pl.LazyFrame:
-    """Open a parquet file as a Polars LazyFrame, selecting only needed columns."""
-    return pl.scan_parquet(file_path).select(columns)
-
-
 def _apply_filter(lf: pl.LazyFrame, row_filter: str) -> pl.LazyFrame:
-    """Apply a Polars SQL-style filter expression string. Empty = no filter."""
+    """Apply an optional pandas-style filter string. Empty = no filter."""
     row_filter = row_filter.strip()
     if not row_filter:
         return lf
+    df_pd = lf.collect().to_pandas()
     try:
-        return lf.filter(pl.Expr.deserialize(row_filter.encode(), format="json"))
-    except Exception:
-        # Fall back to pandas query on collected frame if Polars expr parse fails
-        df_pd = lf.collect().to_pandas()
-        try:
-            df_pd = df_pd.query(row_filter)
-        except Exception as e:
-            raise ValueError(
-                f"Filter expression failed: {e}\n"
-                f"Expression: '{row_filter}'\n"
-                f"Tip: use pandas query syntax, e.g. \"product_type == 'Mortgage' and vintage_year >= 2020\""
-            )
-        return pl.from_pandas(df_pd).lazy()
-
-
-def _agg_exprs(actual: str, predicted: str, exposure: str | None) -> list[pl.Expr]:
-    """Build the standard set of Polars aggregation expressions."""
-    exprs = [
-        pl.len().alias("n_accounts"),
-        pl.col(actual).mean().alias(f"mean_{actual}"),
-        pl.col(predicted).mean().alias(f"mean_{predicted}"),
-    ]
-    if exposure:
-        # exposure-weighted mean = sum(value * weight) / sum(weight)
-        exprs += [
-            pl.col(exposure).sum().alias("total_exposure"),
-            (
-                (pl.col(actual) * pl.col(exposure)).sum()
-                / pl.col(exposure).sum()
-            ).alias(f"ew_{actual}"),
-            (
-                (pl.col(predicted) * pl.col(exposure)).sum()
-                / pl.col(exposure).sum()
-            ).alias(f"ew_{predicted}"),
-        ]
-    return exprs
-
-
-def _schema_names(file_path: str) -> list[str]:
-    return pl.scan_parquet(file_path).collect_schema().names()
+        df_pd = df_pd.query(row_filter)
+    except Exception as e:
+        raise ValueError(
+            f"Filter expression failed: {e}\n"
+            f"Expression: '{row_filter}'\n"
+            "Tip: use pandas query syntax, e.g. \"product_type == 'Credit Card'\""
+        )
+    return pl.from_pandas(df_pd).lazy()
 
 
 def _check_columns(file_path: str, needed: list[str]) -> str | None:
-    """Return error string if any column is missing, else None."""
-    available = _schema_names(file_path)
+    """Return an error string if any column is missing from the parquet schema."""
+    available = pl.scan_parquet(file_path).collect_schema().names()
     missing = [c for c in needed if c not in available]
     if missing:
         return f"ERROR: Columns not found in parquet: {missing}\nAvailable: {available}"
     return None
 
 
-def _finish(lf: pl.LazyFrame, dataset_name: str, sort_col: str | None = None) -> pl.DataFrame:
-    """Collect LazyFrame, optionally sort, and return Polars DataFrame."""
-    df = lf.collect()
-    if sort_col and sort_col in df.columns:
-        df = df.sort(sort_col)
+def _cc_filter_stock(lf: pl.LazyFrame, stmt_col: str, horizon_col: str) -> pl.LazyFrame:
+    """EOS pre-filter: keep only rows at the max horizon per statement_month."""
+    max_h = lf.group_by(stmt_col).agg(pl.col(horizon_col).max().alias("_max_h"))
+    return (
+        lf.join(max_h, on=stmt_col, how="left")
+        .filter(pl.col(horizon_col) == pl.col("_max_h"))
+        .drop("_max_h")
+    )
+
+
+def _cc_compute_metrics(df: pd.DataFrame, actual_col: str, pred_col: str, level: str) -> pd.DataFrame:
+    """
+    Add portfolio totals, per-account values, and MPE/AMPE to the aggregated DataFrame.
+
+    All calculations are on AGGREGATED group sums, never on individual rows.
+
+    Columns added:
+      total_actual, total_predicted       — group sums
+      per_account_actual, per_account_predicted — total ÷ n_rows
+      plot_actual, plot_predicted         — the right values for the requested level:
+                                            portfolio → total_*
+                                            account   → per_account_*
+      MPE  = (plot_predicted - plot_actual) / plot_actual
+      AMPE = |MPE|
+    """
+    import numpy as np
+
+    total_actual    = df[actual_col]
+    total_predicted = df[pred_col]
+    n               = df["n_rows"]
+
+    df["total_actual"]          = total_actual
+    df["total_predicted"]       = total_predicted
+    df["per_account_actual"]    = total_actual    / n
+    df["per_account_predicted"] = total_predicted / n
+
+    if level == "account":
+        plot_actual    = df["per_account_actual"]
+        plot_predicted = df["per_account_predicted"]
+    else:
+        plot_actual    = total_actual
+        plot_predicted = total_predicted
+
+    df["plot_actual"]    = plot_actual
+    df["plot_predicted"] = plot_predicted
+
+    error      = plot_predicted - plot_actual
+    df["MPE"]  = np.where(plot_actual != 0, error / plot_actual, float("nan"))
+    df["AMPE"] = df["MPE"].abs()
     return df
 
 
+def _cc_summary(df: pd.DataFrame, dataset_name: str, metric_type: str,
+                dimension: str, level: str, group_col: str) -> str:
+    """Return a human-readable result summary."""
+    metric_desc = "sum across all horizons" if metric_type == "flow" else "last horizon per stmt_month"
+    try:
+        range_str = f"{df[group_col].min()} → {df[group_col].max()}"
+    except Exception:
+        range_str = "n/a"
+    plot_actual_src    = "per_account_actual"    if level == "account" else "total_actual"
+    plot_predicted_src = "per_account_predicted" if level == "account" else "total_predicted"
+    return (
+        f"Credit card aggregation complete → dataset '{dataset_name}'\n"
+        f"  dimension   : {dimension}\n"
+        f"  metric_type : {metric_type} ({metric_desc})\n"
+        f"  level       : {level}\n"
+        f"  groups      : {len(df)}  (range: {range_str})\n"
+        f"  columns     : {list(df.columns)}\n"
+        f"  Mean MPE    : {df['MPE'].mean():.4f}\n"
+        f"  Mean AMPE   : {df['AMPE'].mean():.4f}\n"
+        f"\nColumn guide for charts and reporting:\n"
+        f"  x-axis      : '{group_col}'\n"
+        f"  actual      : 'plot_actual'    (= {plot_actual_src})\n"
+        f"  predicted   : 'plot_predicted' (= {plot_predicted_src})\n"
+        f"  error metr. : 'MPE', 'AMPE'\n"
+        f"\nFirst 5 rows:\n{df.head().to_string(index=False)}"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Tools
+# Main tool
 # ─────────────────────────────────────────────────────────────────────────────
 
 @tool
-def aggregate_parquet(
+def aggregate_credit_card(
     file_path: str,
     actual_column: str,
     predicted_column: str,
-    group_by_columns: str,
-    dataset_name: str = "agg",
-    exposure_column: str = "",
-    row_filter: str = "",
-) -> str:
-    """Read a large account-level parquet file using Polars and aggregate by any columns.
-
-    The file is read lazily (only needed columns, no full load into RAM).
-    The aggregated result — typically a small DataFrame — is stored as a
-    named pandas dataset ready for metrics and visualization tools.
-
-    Args:
-        file_path: Path to the .parquet file.
-        actual_column: Column name for observed values (e.g. actual_pd).
-        predicted_column: Column name for model-predicted values (e.g. predicted_pd).
-        group_by_columns: Comma-separated columns to group by (e.g. "product_type,risk_segment").
-        dataset_name: Name to store the aggregated result under. Defaults to "agg".
-        exposure_column: Column for exposure/EAD weighting. Leave empty to skip.
-        row_filter: Optional pandas-style filter string applied before aggregation
-                    (e.g. "product_type == 'Mortgage' and vintage_year >= 2020").
-    """
-    if not os.path.exists(file_path):
-        return f"ERROR: File not found: {file_path}"
-
-    group_cols = [c.strip() for c in group_by_columns.split(",") if c.strip()]
-    if not group_cols:
-        return "ERROR: group_by_columns must not be empty."
-
-    exposure_col = exposure_column.strip() or None
-    needed = list(dict.fromkeys(
-        group_cols + [actual_column, predicted_column]
-        + ([exposure_col] if exposure_col else [])
-    ))
-
-    err = _check_columns(file_path, needed)
-    if err:
-        return err
-
-    try:
-        lf = _read_lazy(file_path, needed)
-        lf = _apply_filter(lf, row_filter)
-        agg_lf = lf.group_by(group_cols).agg(_agg_exprs(actual_column, predicted_column, exposure_col))
-        agg_df = _finish(agg_lf, dataset_name).sort(group_cols)
-        _store(dataset_name, agg_df.to_pandas())
-    except ValueError as e:
-        return f"ERROR: {e}"
-    except Exception as e:
-        return f"ERROR during aggregation: {e}"
-
-    preview = agg_df.head(5).to_pandas().to_string(index=False)
-    return (
-        f"Aggregated '{file_path}' → dataset '{dataset_name}'\n"
-        f"Shape: {agg_df.shape[0]:,} groups × {agg_df.shape[1]} columns\n"
-        f"Columns: {agg_df.columns}\n\n"
-        f"First 5 rows:\n{preview}"
-    )
-
-
-@tool
-def aggregate_by_statement_month(
-    file_path: str,
-    actual_column: str,
-    predicted_column: str,
-    date_column: str,
-    dataset_name: str = "agg_monthly",
-    period: str = "month",
-    extra_group_columns: str = "",
-    exposure_column: str = "",
-    row_filter: str = "",
-) -> str:
-    """Read a large parquet file with Polars and aggregate by statement date period.
-
-    Groups by the truncated statement/performance date (month, quarter, or year),
-    plus any extra categorical columns. Good for time-series views of model performance.
-
-    Args:
-        file_path: Path to the .parquet file.
-        actual_column: Column with observed values.
-        predicted_column: Column with model predictions.
-        date_column: Name of the statement/performance date column.
-        dataset_name: Name to store the result under. Defaults to "agg_monthly".
-        period: Time granularity — "month", "quarter", or "year". Defaults to "month".
-        extra_group_columns: Comma-separated additional columns to group by (e.g. "product_type").
-        exposure_column: Column for exposure weighting (optional).
-        row_filter: Optional pandas-style filter string applied before aggregation.
-    """
-    if not os.path.exists(file_path):
-        return f"ERROR: File not found: {file_path}"
-
-    period = period.lower().strip()
-    if period not in ("month", "quarter", "year"):
-        return "ERROR: period must be 'month', 'quarter', or 'year'."
-
-    extra_cols = [c.strip() for c in extra_group_columns.split(",") if c.strip()]
-    exposure_col = exposure_column.strip() or None
-    period_col = f"statement_{period}"
-
-    needed = list(dict.fromkeys(
-        [date_column, actual_column, predicted_column]
-        + extra_cols + ([exposure_col] if exposure_col else [])
-    ))
-    err = _check_columns(file_path, needed)
-    if err:
-        return err
-
-    try:
-        lf = _read_lazy(file_path, needed)
-        lf = _apply_filter(lf, row_filter)
-
-        # Truncate date to period
-        if period == "month":
-            lf = lf.with_columns(
-                pl.col(date_column).cast(pl.Date).dt.truncate("1mo").alias(period_col)
-            )
-        elif period == "quarter":
-            lf = lf.with_columns(
-                pl.col(date_column).cast(pl.Date).dt.truncate("1q").alias(period_col)
-            )
-        elif period == "year":
-            lf = lf.with_columns(
-                pl.col(date_column).cast(pl.Date).dt.year().alias(period_col)
-            )
-
-        group_cols = [period_col] + extra_cols
-        agg_lf = lf.group_by(group_cols).agg(_agg_exprs(actual_column, predicted_column, exposure_col))
-        agg_df = _finish(agg_lf, dataset_name, sort_col=period_col)
-        _store(dataset_name, agg_df.to_pandas())
-    except ValueError as e:
-        return f"ERROR: {e}"
-    except Exception as e:
-        return f"ERROR during aggregation: {e}"
-
-    preview = agg_df.head(5).to_pandas().to_string(index=False)
-    period_vals = agg_df[period_col]
-    return (
-        f"Statement-{period} aggregation complete → dataset '{dataset_name}'\n"
-        f"Shape: {agg_df.shape[0]:,} periods × {agg_df.shape[1]} columns\n"
-        f"Date range: {period_vals.min()} → {period_vals.max()}\n\n"
-        f"First 5 rows:\n{preview}"
-    )
-
-
-@tool
-def aggregate_by_vintage(
-    file_path: str,
-    actual_column: str,
-    predicted_column: str,
-    origination_date_column: str,
-    dataset_name: str = "agg_vintage",
-    vintage_period: str = "quarter",
-    extra_group_columns: str = "",
-    exposure_column: str = "",
-    row_filter: str = "",
-) -> str:
-    """Read a large parquet file with Polars and aggregate by origination vintage cohort.
-
-    Vintage = truncated origination date (month, quarter, or year). This is the
-    standard CCAR approach: compare actual vs predicted performance across cohorts
-    grouped by when accounts were originated.
-
-    Args:
-        file_path: Path to the .parquet file.
-        actual_column: Column with observed values.
-        predicted_column: Column with model predictions.
-        origination_date_column: Column containing account origination/booking date.
-        dataset_name: Name to store the result under. Defaults to "agg_vintage".
-        vintage_period: Cohort granularity — "month", "quarter", or "year". Defaults to "quarter".
-        extra_group_columns: Additional columns to cross-cut vintages by (e.g. "product_type").
-        exposure_column: Column for exposure weighting (optional).
-        row_filter: Optional pandas-style filter string applied before aggregation.
-    """
-    if not os.path.exists(file_path):
-        return f"ERROR: File not found: {file_path}"
-
-    vintage_period = vintage_period.lower().strip()
-    if vintage_period not in ("month", "quarter", "year"):
-        return "ERROR: vintage_period must be 'month', 'quarter', or 'year'."
-
-    extra_cols = [c.strip() for c in extra_group_columns.split(",") if c.strip()]
-    exposure_col = exposure_column.strip() or None
-    vintage_col = f"vintage_{vintage_period}"
-
-    needed = list(dict.fromkeys(
-        [origination_date_column, actual_column, predicted_column]
-        + extra_cols + ([exposure_col] if exposure_col else [])
-    ))
-    err = _check_columns(file_path, needed)
-    if err:
-        return err
-
-    try:
-        lf = _read_lazy(file_path, needed)
-        lf = _apply_filter(lf, row_filter)
-
-        if vintage_period == "month":
-            lf = lf.with_columns(
-                pl.col(origination_date_column).cast(pl.Date).dt.truncate("1mo").alias(vintage_col)
-            )
-        elif vintage_period == "quarter":
-            lf = lf.with_columns(
-                pl.col(origination_date_column).cast(pl.Date).dt.truncate("1q").alias(vintage_col)
-            )
-        elif vintage_period == "year":
-            lf = lf.with_columns(
-                pl.col(origination_date_column).cast(pl.Date).dt.year().alias(vintage_col)
-            )
-
-        group_cols = [vintage_col] + extra_cols
-        agg_lf = lf.group_by(group_cols).agg(_agg_exprs(actual_column, predicted_column, exposure_col))
-        agg_df = _finish(agg_lf, dataset_name, sort_col=vintage_col)
-        _store(dataset_name, agg_df.to_pandas())
-    except ValueError as e:
-        return f"ERROR: {e}"
-    except Exception as e:
-        return f"ERROR during aggregation: {e}"
-
-    preview = agg_df.head(5).to_pandas().to_string(index=False)
-    vintage_vals = agg_df[vintage_col]
-    return (
-        f"Vintage-{vintage_period} aggregation complete → dataset '{dataset_name}'\n"
-        f"Shape: {agg_df.shape[0]:,} cohorts × {agg_df.shape[1]} columns\n"
-        f"Vintage range: {vintage_vals.min()} → {vintage_vals.max()}\n\n"
-        f"First 5 rows:\n{preview}"
-    )
-
-
-@tool
-def aggregate_by_feature_bins(
-    file_path: str,
-    actual_column: str,
-    predicted_column: str,
-    bin_column: str,
-    dataset_name: str = "agg_bins",
+    metric_type: str,
+    dimension: str,
+    dataset_name: str,
+    level: str = "portfolio",
+    statement_month_column: str = "statement_month",
+    horizon_column: str = "horizon",
+    performance_month_column: str = "performance_month",
+    vintage_column: str = "origination_date",
+    vintage_period: str = "year",
+    feature_column: str = "",
     n_bins: int = 10,
     bin_method: str = "quantile",
-    extra_group_columns: str = "",
-    exposure_column: str = "",
+    bin_thresholds: str = "",
     row_filter: str = "",
 ) -> str:
-    """Read a large parquet file with Polars and aggregate by binning a continuous feature.
+    """Aggregate credit card backtesting data with domain-specific flow/stock logic.
 
-    Bins the specified continuous column into n_bins buckets (quantile or equal-width),
-    then aggregates actual vs predicted per bin. Useful for score-band, LTV tier,
-    balance bucket, or any numeric segmentation analysis.
+    METRIC TYPE:
+      "flow"  — Payment, PurchaseVolume: sum actual/predicted across ALL horizons.
+      "stock" — EOS: filter to MAX horizon per statement_month first, then sum.
+
+    DIMENSION:
+      "statement_month"   — group by forecast origination month
+      "vintage"           — group by account origination cohort (year/quarter/month)
+      "horizon"           — group by forecast horizon number (1–28)
+      "performance_month" — group by calendar outcome month
+      "feature_bins"      — bin a numeric column then group (requires feature_column)
+
+    LEVEL:
+      "portfolio" — plot_actual/plot_predicted = group totals
+      "account"   — plot_actual/plot_predicted = group totals ÷ n_accounts
+
+    OUTPUT always includes:
+      total_actual, total_predicted     (portfolio sums)
+      per_account_actual, per_account_predicted
+      plot_actual, plot_predicted       (use these for ALL charts)
+      MPE  = (plot_predicted - plot_actual) / plot_actual
+      AMPE = |MPE|
 
     Args:
         file_path: Path to the .parquet file.
-        actual_column: Column with observed values.
-        predicted_column: Column with model predictions.
-        bin_column: Continuous column to bin (e.g. credit_score, ltv_ratio, balance).
-        dataset_name: Name to store the result under. Defaults to "agg_bins".
-        n_bins: Number of bins to create. Defaults to 10.
-        bin_method: "quantile" for equal-frequency bins or "equal_width" for equal-range bins. Defaults to "quantile".
-        extra_group_columns: Additional categorical columns to cross-cut bins by.
-        exposure_column: Column for exposure weighting (optional).
-        row_filter: Optional pandas-style filter string applied before aggregation.
+        actual_column: Exact column name for actual values.
+        predicted_column: Exact column name for predicted values.
+        metric_type: "flow" or "stock".
+        dimension: "statement_month", "vintage", "horizon", "performance_month",
+                   or "feature_bins".
+        dataset_name: Name to store the result under for later viz tools.
+        level: "portfolio" or "account". Defaults to "portfolio".
+        statement_month_column: Defaults to "statement_month".
+        horizon_column: Defaults to "horizon".
+        performance_month_column: Defaults to "performance_month".
+        vintage_column: Defaults to "origination_date".
+        vintage_period: "year", "quarter", or "month". Defaults to "year".
+        feature_column: Required for dimension="feature_bins".
+        n_bins: Number of bins used when bin_thresholds is empty. Defaults to 10.
+        bin_method: "quantile" or "equal". Used only when bin_thresholds is empty.
+                    Defaults to "quantile".
+        bin_thresholds: Comma-separated numeric cut-points for custom bins, e.g.
+                        "610,650,695,720,770". When provided, n_bins and bin_method
+                        are ignored. Values outside the range are captured in edge
+                        bins (−∞ to first threshold, last threshold to +∞).
+        row_filter: Optional pandas query string applied before aggregation.
+
+    Returns:
+        Summary with group range, mean MPE, mean AMPE, column guide, and first 5 rows.
     """
+    VALID_DIMENSIONS = ("statement_month", "vintage", "horizon", "performance_month", "feature_bins")
+
+    if metric_type not in ("flow", "stock"):
+        return f"ERROR: metric_type must be 'flow' or 'stock', got '{metric_type}'"
+    if dimension not in VALID_DIMENSIONS:
+        return f"ERROR: dimension must be one of {VALID_DIMENSIONS}, got '{dimension}'"
+    if level not in ("portfolio", "account"):
+        return f"ERROR: level must be 'portfolio' or 'account', got '{level}'"
+    if dimension == "feature_bins" and not feature_column.strip():
+        return "ERROR: feature_column is required when dimension='feature_bins'"
     if not os.path.exists(file_path):
         return f"ERROR: File not found: {file_path}"
 
-    bin_method = bin_method.lower().strip()
-    if bin_method not in ("quantile", "equal_width"):
-        return "ERROR: bin_method must be 'quantile' or 'equal_width'."
+    # Columns needed from parquet
+    needed = {actual_column, predicted_column, statement_month_column, horizon_column}
+    if dimension == "vintage":
+        needed.add(vintage_column)
+    elif dimension == "performance_month":
+        needed.add(performance_month_column)
+    elif dimension == "feature_bins":
+        needed.add(feature_column.strip())
 
-    extra_cols = [c.strip() for c in extra_group_columns.split(",") if c.strip()]
-    exposure_col = exposure_column.strip() or None
-    bin_label_col = f"{bin_column}_bin"
-
-    needed = list(dict.fromkeys(
-        [bin_column, actual_column, predicted_column]
-        + extra_cols + ([exposure_col] if exposure_col else [])
-    ))
-    err = _check_columns(file_path, needed)
+    err = _check_columns(file_path, list(needed))
     if err:
         return err
 
     try:
-        # Collect only needed columns — binning requires full column for quantile computation
-        df = pl.scan_parquet(file_path).select(needed).collect()
+        lf = pl.scan_parquet(file_path).select(list(needed))
+        lf = _apply_filter(lf, row_filter)
 
-        if bin_method == "quantile":
-            df = df.with_columns(
-                pl.col(bin_column).qcut(n_bins, labels=[str(i) for i in range(1, n_bins + 1)],
-                                        allow_duplicates=True).alias(bin_label_col)
-            )
-        else:
-            df = df.with_columns(
-                pl.col(bin_column).cut(n_bins, labels=[str(i) for i in range(1, n_bins + 1)]).alias(bin_label_col)
-            )
+        # EOS pre-filter: keep max-horizon row per statement_month
+        if metric_type == "stock":
+            lf = _cc_filter_stock(lf, statement_month_column, horizon_column)
 
-        group_cols = [bin_label_col] + extra_cols
+        # Build the group-by column
+        _PERIOD_MAP = {"year": "1y", "quarter": "1q", "month": "1mo"}
+
+        if dimension == "statement_month":
+            lf = lf.with_columns(
+                pl.col(statement_month_column).cast(pl.Date).dt.truncate("1mo").alias("_group")
+            )
+            group_col, out_col = "_group", "statement_month"
+
+        elif dimension == "vintage":
+            trunc = _PERIOD_MAP.get(vintage_period, "1y")
+            lf = lf.with_columns(
+                pl.col(vintage_column).cast(pl.Date).dt.truncate(trunc).alias("_group")
+            )
+            group_col, out_col = "_group", f"vintage_{vintage_period}"
+
+        elif dimension == "horizon":
+            group_col, out_col = horizon_column, horizon_column
+
+        elif dimension == "performance_month":
+            lf = lf.with_columns(
+                pl.col(performance_month_column).cast(pl.Date).dt.truncate("1mo").alias("_group")
+            )
+            group_col, out_col = "_group", "performance_month"
+
+        elif dimension == "feature_bins":
+            fc = feature_column.strip()
+            df_collected = lf.collect().to_pandas()
+            thresholds_str = bin_thresholds.strip()
+            if thresholds_str:
+                # Custom thresholds: parse comma-separated numbers and add ±inf edges
+                import math
+                cuts = sorted(float(v.strip()) for v in thresholds_str.split(",") if v.strip())
+                bins = [-math.inf] + cuts + [math.inf]
+                df_collected["_group"] = pd.cut(
+                    df_collected[fc], bins=bins, duplicates="drop"
+                ).astype(str)
+            elif bin_method == "quantile":
+                df_collected["_group"] = pd.qcut(
+                    df_collected[fc], q=n_bins, duplicates="drop"
+                ).astype(str)
+            else:
+                df_collected["_group"] = pd.cut(
+                    df_collected[fc], bins=n_bins, duplicates="drop"
+                ).astype(str)
+            lf = pl.from_pandas(df_collected).lazy()
+            group_col, out_col = "_group", f"{fc}_bin"
+
+        # Aggregate
         agg_df = (
-            df.group_by(group_cols)
-            .agg(
-                _agg_exprs(actual_column, predicted_column, exposure_col)
-                + [pl.col(bin_column).mean().round(4).alias(f"{bin_column}_midpoint")]
-            )
-            .sort(bin_label_col)
+            lf.group_by(group_col)
+            .agg([
+                pl.col(actual_column).sum().alias("total_actual"),
+                pl.col(predicted_column).sum().alias("total_predicted"),
+                pl.len().alias("n_rows"),
+            ])
+            .sort(group_col)
+            .collect()
         )
-        _store(dataset_name, agg_df.to_pandas())
+
+        df = agg_df.to_pandas().rename(columns={group_col: out_col})
+        df = _cc_compute_metrics(df, "total_actual", "total_predicted", level)
+        _store(dataset_name, df)
+
     except ValueError as e:
         return f"ERROR: {e}"
     except Exception as e:
         return f"ERROR during aggregation: {e}"
 
-    preview = agg_df.to_pandas().to_string(index=False)
-    return (
-        f"Feature-bin aggregation on '{bin_column}' ({bin_method}, {n_bins} bins) "
-        f"→ dataset '{dataset_name}'\n"
-        f"Shape: {agg_df.shape[0]:,} bins × {agg_df.shape[1]} columns\n\n"
-        f"{preview}"
-    )
+    return _cc_summary(df, dataset_name, metric_type, dimension, level, out_col)

@@ -23,3 +23,6 @@ seaborn
 # ── Config & environment ──────────────────────────────────────────────────────
 python-dotenv    # loads .env file
 pyyaml           # reads config.yaml
+
+# ── Web UI ────────────────────────────────────────────────────────────────────
+gradio>=5.14.0   # web interface (smolagents[gradio] installs this)

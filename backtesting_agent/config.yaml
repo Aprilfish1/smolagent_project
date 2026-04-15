@@ -7,36 +7,59 @@
 # to them by their short name in plain English (e.g. "analyze PD").
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Dataset file paths
+# The agent will use these by default when you say "the dataset" or "Round 1".
+# ─────────────────────────────────────────────────────────────────────────────
+datasets:
+  round1: backtesting_agent/sample_data/ccar_round1.parquet
+  round2: backtesting_agent/sample_data/ccar_round2.parquet
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Time dimension column names
+# Fill in the actual column names from your parquet file.
+# ─────────────────────────────────────────────────────────────────────────────
+time_columns:
+  statement_month:    statement_month      # when the forecast was made
+  performance_month:  performance_month    # when the outcome was observed
+  # horizon is computed automatically as performance_month - statement_month
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Target variables
+# Add one block per model output you want to analyse.
+# actual / predicted → exact column names in your parquet file.
+# ─────────────────────────────────────────────────────────────────────────────
 target_variables:
-  # Short name  →  actual column name in your CSV/Excel
-  #              →  predicted column name in your CSV/Excel
 
-  PD:                          # Probability of Default
-    actual:    actual_pd
-    predicted: predicted_pd
+  Payment:
+    actual:      actual_payment
+    predicted:   predicted_payment
+    metric_type: flow           # sum across ALL horizons per statement_month
 
-  LGD:                         # Loss Given Default
-    actual:    actual_lgd
-    predicted: predicted_lgd
+  PurchaseVolume:
+    actual:      actual_purchase_volume
+    predicted:   predicted_purchase_volume
+    metric_type: flow           # sum across ALL horizons per statement_month
 
-  EAD:                         # Exposure at Default
-    actual:    actual_ead
-    predicted: predicted_ead
-
-  NCO:                         # Net Charge-Off Rate  (rename/remove as needed)
-    actual:    actual_loss
-    predicted: predicted_loss
+  EOS:
+    actual:      actual_eos
+    predicted:   predicted_eos
+    metric_type: stock          # last (max) horizon per statement_month only
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Default segmentation columns
-# The agent will suggest these when the user asks to "break down by segment"
-# without being more specific.
+# Used when the user says "break down by segment" without being specific.
 # ─────────────────────────────────────────────────────────────────────────────
 default_group_by_columns:
   - product_type
   - risk_segment
   - geography
-  - vintage_year
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Metric type reference (for documentation)
+# flow  = sum across all horizons per statement_month  (Payment, PurchaseVolume)
+# stock = value at last horizon per statement_month    (EOS)
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output directory for all generated charts
