@@ -573,30 +573,20 @@ with gr.Blocks(title="CCAR Backtesting Agent",
         # ── Tab 1: Portfolio Dashboard ────────────────────────────────────────
         with gr.Tab("📊 Portfolio Dashboard"):
             gr.Markdown("### Dataset Selection")
-            with gr.Row():
-                with gr.Column(scale=4):
-                    _default_path = str(SAMPLE_DIR / "ccar_round1.parquet")
-                    dataset_path_box = gr.Textbox(
-                        value=_default_path,
-                        label="Dataset path (absolute path to your .parquet file)",
-                        placeholder="/path/to/your/dataset.parquet",
-                        interactive=True,
-                    )
-                with gr.Column(scale=2, min_width=180):
-                    upload_btn = gr.UploadButton(
-                        "📂 Upload Parquet File",
-                        file_types=[".parquet"],
-                        file_count="single",
-                    )
-
-            def _handle_upload(file_obj):
-                return file_obj.name if file_obj else ""
-
-            upload_btn.upload(fn=_handle_upload, inputs=upload_btn, outputs=dataset_path_box)
-
+            gr.Markdown(
+                "Enter the **absolute path** to your `.parquet` file on the server, "
+                "then click **Load / Refresh Dashboard**."
+            )
+            _default_path = str(SAMPLE_DIR / "ccar_round1.parquet")
+            dataset_path_box = gr.Textbox(
+                value=_default_path,
+                label="Dataset path (absolute path to your .parquet file on the server)",
+                placeholder="/home/jovyan/your_data/ccar_backtest.parquet",
+                interactive=True,
+            )
             with gr.Row():
                 load_btn    = gr.Button("🔄 Load / Refresh Dashboard", variant="primary")
-                dash_status = gr.Textbox(value="Enter a dataset path or upload a file, then click Load.",
+                dash_status = gr.Textbox(value="Edit the path above if needed, then click Load.",
                                          label="Status", interactive=False, scale=4)
 
             # Section 1: Dataset overview
