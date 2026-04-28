@@ -656,12 +656,20 @@ Output charts saved to: `{os.path.abspath(OUTPUT_DIR)}`
 
 
 if __name__ == "__main__":
-    import signal, subprocess
-    result = subprocess.run(["lsof", "-ti", "tcp:7860"], capture_output=True, text=True)
-    for pid in result.stdout.strip().splitlines():
-        try:
-            os.kill(int(pid), signal.SIGKILL)
-        except Exception:
-            pass
+    import signal, subprocess, platform
+    # Kill any process already using port 7860 (cross-platform)
+    try:
+        if platform.system() == "Darwin":
+            result = subprocess.run(["lsof", "-ti", "tcp:7860"], capture_output=True, text=True)
+            for pid in result.stdout.strip().splitlines():
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except Exception:
+                    pass
+        else:
+            # Linux: use fuser (kills the process directly)
+            subprocess.run(["fuser", "-k", "7860/tcp"], capture_output=True)
+    except Exception:
+        pass
     demo.launch(server_name="0.0.0.0", server_port=7860,
                 share=False, inbrowser=True)
