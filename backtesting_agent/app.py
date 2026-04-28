@@ -120,16 +120,31 @@ def _fmt_dollars(v: float) -> str:
 
 # ── Dashboard section functions ───────────────────────────────────────────────
 
-def _dashboard_overview(cfg: dict) -> pd.DataFrame:
+def _resolve_primary_path(cfg: dict, path_override: str) -> str:
+    """Return path_override if given, else the first dataset path from config."""
+    p = path_override.strip()
+    if p:
+        return p
+    datasets = cfg.get("datasets", {})
+    return next(iter(datasets.values()), "") if datasets else ""
+
+
+def _dashboard_overview(cfg: dict, path_override: str = "") -> pd.DataFrame:
     """Fast schema + date-range overview using polars lazy scan."""
     try:
         import polars as pl
     except ImportError:
         return pd.DataFrame([{"Error": "polars not installed"}])
 
-    datasets  = cfg.get("datasets", {})
     time_cols = cfg.get("time_columns", {})
     stmt_col  = time_cols.get("statement_month", "statement_month")
+
+    primary = _resolve_primary_path(cfg, path_override)
+    if path_override.strip():
+        # User supplied a custom path — show just that one
+        datasets = {"custom": path_override.strip()}
+    else:
+        datasets = cfg.get("datasets", {})
 
     if not datasets:
         return pd.DataFrame([{"Dataset": "—", "Rows": "—", "Columns": "—",
@@ -160,7 +175,7 @@ def _dashboard_overview(cfg: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _dashboard_performance_by_period(cfg: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _dashboard_performance_by_period(cfg: dict, path_override: str = "") -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     MPE / AMPE per target variable for each analysis period.
     Returns (recession_df, recent_df).
@@ -171,7 +186,6 @@ def _dashboard_performance_by_period(cfg: dict) -> tuple[pd.DataFrame, pd.DataFr
         err = pd.DataFrame([{"Error": "polars not installed"}])
         return err, err
 
-    datasets    = cfg.get("datasets", {})
     targets     = cfg.get("target_variables", {})
     time_cols   = cfg.get("time_columns", {})
     row_filter  = cfg.get("default_row_filter", "")
@@ -179,11 +193,11 @@ def _dashboard_performance_by_period(cfg: dict) -> tuple[pd.DataFrame, pd.DataFr
     horizon_col = time_cols.get("horizon", "horizon")
     perf_col    = time_cols.get("performance_month", "performance_month")
 
-    if not datasets or not targets:
-        empty = pd.DataFrame([{"Info": "No datasets or targets configured"}])
+    primary_path = _resolve_primary_path(cfg, path_override)
+    if not primary_path or not targets:
+        empty = pd.DataFrame([{"Info": "No dataset or targets configured"}])
         return empty, empty
 
-    primary_path = next(iter(datasets.values()))
     if not os.path.exists(primary_path):
         err = pd.DataFrame([{"Error": f"Dataset not found: {primary_path}"}])
         return err, err
@@ -231,7 +245,7 @@ def _dashboard_performance_by_period(cfg: dict) -> tuple[pd.DataFrame, pd.DataFr
     return dfs[0], dfs[1]
 
 
-def _dashboard_eos_neg_stats(cfg: dict) -> pd.DataFrame:
+def _dashboard_eos_neg_stats(cfg: dict, path_override: str = "") -> pd.DataFrame:
     """
     Percentage of statement months where portfolio-level actual / predicted
     EOS balance (at last horizon) is negative.
@@ -241,7 +255,6 @@ def _dashboard_eos_neg_stats(cfg: dict) -> pd.DataFrame:
     except ImportError:
         return pd.DataFrame([{"Error": "polars not installed"}])
 
-    datasets    = cfg.get("datasets", {})
     targets     = cfg.get("target_variables", {})
     time_cols   = cfg.get("time_columns", {})
     row_filter  = cfg.get("default_row_filter", "")
@@ -251,10 +264,10 @@ def _dashboard_eos_neg_stats(cfg: dict) -> pd.DataFrame:
 
     stock_targets = {n: c for n, c in targets.items()
                      if c.get("metric_type") == "stock"}
-    if not stock_targets or not datasets:
+    primary_path = _resolve_primary_path(cfg, path_override)
+    if not stock_targets or not primary_path:
         return pd.DataFrame([{"Info": "No stock/EOS targets in config.yaml"}])
 
-    primary_path = next(iter(datasets.values()))
     if not os.path.exists(primary_path):
         return pd.DataFrame([{"Error": f"Dataset not found: {primary_path}"}])
 
@@ -292,7 +305,7 @@ def _dashboard_eos_neg_stats(cfg: dict) -> pd.DataFrame:
     return pd.DataFrame(results) if results else pd.DataFrame([{"Info": "No results"}])
 
 
-def _dashboard_avg_values(cfg: dict) -> pd.DataFrame:
+def _dashboard_avg_values(cfg: dict, path_override: str = "") -> pd.DataFrame:
     """
     Per target variable:
       Flow  → avg across stmt months of (portfolio total, account-level mean)
@@ -306,7 +319,6 @@ def _dashboard_avg_values(cfg: dict) -> pd.DataFrame:
     except ImportError:
         return pd.DataFrame([{"Error": "polars not installed"}])
 
-    datasets    = cfg.get("datasets", {})
     targets     = cfg.get("target_variables", {})
     time_cols   = cfg.get("time_columns", {})
     row_filter  = cfg.get("default_row_filter", "")
@@ -314,10 +326,10 @@ def _dashboard_avg_values(cfg: dict) -> pd.DataFrame:
     horizon_col = time_cols.get("horizon", "horizon")
     perf_col    = time_cols.get("performance_month", "performance_month")
 
-    if not datasets or not targets:
-        return pd.DataFrame([{"Info": "No datasets or targets configured"}])
+    primary_path = _resolve_primary_path(cfg, path_override)
+    if not primary_path or not targets:
+        return pd.DataFrame([{"Info": "No dataset or targets configured"}])
 
-    primary_path = next(iter(datasets.values()))
     if not os.path.exists(primary_path):
         return pd.DataFrame([{"Error": f"Dataset not found: {primary_path}"}])
 
@@ -362,14 +374,13 @@ def _dashboard_avg_values(cfg: dict) -> pd.DataFrame:
     return pd.DataFrame(results) if results else pd.DataFrame([{"Info": "No results"}])
 
 
-def _dashboard_trend_chart(cfg: dict):
+def _dashboard_trend_chart(cfg: dict, path_override: str = ""):
     """MPE trend over statement months for all targets — returns a matplotlib Figure."""
     try:
         import polars as pl
     except ImportError:
         return None
 
-    datasets    = cfg.get("datasets", {})
     targets     = cfg.get("target_variables", {})
     time_cols   = cfg.get("time_columns", {})
     row_filter  = cfg.get("default_row_filter", "")
@@ -377,9 +388,9 @@ def _dashboard_trend_chart(cfg: dict):
     horizon_col = time_cols.get("horizon", "horizon")
     perf_col    = time_cols.get("performance_month", "performance_month")
 
-    if not datasets or not targets:
+    primary_path = _resolve_primary_path(cfg, path_override)
+    if not primary_path or not targets:
         return None
-    primary_path = next(iter(datasets.values()))
     if not os.path.exists(primary_path):
         return None
 
@@ -431,15 +442,17 @@ def _dashboard_trend_chart(cfg: dict):
     return fig
 
 
-def load_dashboard():
+def load_dashboard(path_override: str = ""):
     """Called when Load/Refresh is clicked — computes all dashboard sections."""
     cfg = _load_config()
-    overview      = _dashboard_overview(cfg)
-    rec_perf, rec_recent = _dashboard_performance_by_period(cfg)
-    eos_stats     = _dashboard_eos_neg_stats(cfg)
-    avg_vals      = _dashboard_avg_values(cfg)
-    trend_fig     = _dashboard_trend_chart(cfg)
-    return overview, rec_perf, rec_recent, eos_stats, avg_vals, trend_fig, "✅ Dashboard loaded."
+    p   = path_override.strip()
+    status_path = f" ({p})" if p else f" ({_resolve_primary_path(cfg, '')})"
+    overview             = _dashboard_overview(cfg, p)
+    rec_perf, rec_recent = _dashboard_performance_by_period(cfg, p)
+    eos_stats            = _dashboard_eos_neg_stats(cfg, p)
+    avg_vals             = _dashboard_avg_values(cfg, p)
+    trend_fig            = _dashboard_trend_chart(cfg, p)
+    return overview, rec_perf, rec_recent, eos_stats, avg_vals, trend_fig, f"✅ Dashboard loaded{status_path}"
 
 
 # ── Example prompts ───────────────────────────────────────────────────────────
@@ -559,9 +572,31 @@ with gr.Blocks(title="CCAR Backtesting Agent",
 
         # ── Tab 1: Portfolio Dashboard ────────────────────────────────────────
         with gr.Tab("📊 Portfolio Dashboard"):
+            gr.Markdown("### Dataset Selection")
             with gr.Row():
-                load_btn   = gr.Button("🔄 Load / Refresh Dashboard", variant="primary")
-                dash_status = gr.Textbox(value="Click 'Load / Refresh Dashboard' to begin.",
+                with gr.Column(scale=4):
+                    _default_path = str(SAMPLE_DIR / "ccar_round1.parquet")
+                    dataset_path_box = gr.Textbox(
+                        value=_default_path,
+                        label="Dataset path (absolute path to your .parquet file)",
+                        placeholder="/path/to/your/dataset.parquet",
+                        interactive=True,
+                    )
+                with gr.Column(scale=2, min_width=180):
+                    upload_btn = gr.UploadButton(
+                        "📂 Upload Parquet File",
+                        file_types=[".parquet"],
+                        file_count="single",
+                    )
+
+            def _handle_upload(file_obj):
+                return file_obj.name if file_obj else ""
+
+            upload_btn.upload(fn=_handle_upload, inputs=upload_btn, outputs=dataset_path_box)
+
+            with gr.Row():
+                load_btn    = gr.Button("🔄 Load / Refresh Dashboard", variant="primary")
+                dash_status = gr.Textbox(value="Enter a dataset path or upload a file, then click Load.",
                                          label="Status", interactive=False, scale=4)
 
             # Section 1: Dataset overview
@@ -600,6 +635,7 @@ with gr.Blocks(title="CCAR Backtesting Agent",
 
             load_btn.click(
                 fn=load_dashboard,
+                inputs=[dataset_path_box],
                 outputs=[overview_table, rec_perf_table, rec_recent_table,
                          eos_neg_table, avg_table, trend_chart, dash_status],
             )
