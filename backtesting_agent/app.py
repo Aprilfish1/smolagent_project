@@ -707,5 +707,16 @@ if __name__ == "__main__":
             subprocess.run(["fuser", "-k", "7860/tcp"], capture_output=True)
     except Exception:
         pass
-    demo.launch(server_name="0.0.0.0", server_port=7860,
-                share=False, inbrowser=True)
+
+    # JupyterHub proxy support: set root_path so Gradio generates correct URLs
+    # JUPYTERHUB_SERVICE_PREFIX is set automatically by JupyterHub, e.g. /user/jovyan/
+    _jupyter_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "").rstrip("/")
+    _root_path = f"{_jupyter_prefix}/proxy/7860" if _jupyter_prefix else ""
+
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        root_path=_root_path,
+        share=False,
+        inbrowser=False,   # headless server — no browser to open
+    )
