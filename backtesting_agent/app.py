@@ -137,7 +137,10 @@ def _build_task(user_message: str, history: list) -> str:
     lines.append(f"\nUser's latest message: {user_message}")
     lines.append(
         "\nComplete the user's latest request using all context above. "
-        "Do not ask again for information already provided earlier in the conversation."
+        "Do not ask again for clarifications already answered in the conversation. "
+        "However, you MUST still follow the MANDATORY WORKFLOW: present the full "
+        "execution plan and ask 'Shall I proceed? (yes/no)' before calling any tool, "
+        "even if all information is already clear from context."
     )
     return "\n".join(lines)
 
@@ -186,6 +189,11 @@ def run_agent(user_message: str, history: list) -> tuple:
 
 
 def clear_all():
+    """Reset Gradio UI and agent memory so the next request starts fully fresh."""
+    try:
+        agent.memory.reset()
+    except Exception:
+        pass
     return [], "Ready.", []
 
 
