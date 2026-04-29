@@ -437,12 +437,16 @@ def plot_trend(
     display_labels = _resolve_labels(y_cols, y_labels)
 
     df = df.copy()
-    # Try to parse x as datetime for nicer axis labels; fall back to as-is
-    try:
-        df[x_column] = pd.to_datetime(df[x_column])
-        x_is_date = True
-    except Exception:
-        x_is_date = False
+    # Try to parse x as datetime ONLY if the column is not already numeric.
+    # Numeric columns (e.g. horizon 1-28) must NOT be converted: pd.to_datetime()
+    # interprets integers as nanoseconds since epoch, turning 1-28 → 1970-01-01.
+    x_is_date = False
+    if not pd.api.types.is_numeric_dtype(df[x_column]):
+        try:
+            df[x_column] = pd.to_datetime(df[x_column])
+            x_is_date = True
+        except Exception:
+            x_is_date = False
 
     # Colour palette — enough distinct colours for many lines
     palette = plt.get_cmap("tab10").colors  # type: ignore
