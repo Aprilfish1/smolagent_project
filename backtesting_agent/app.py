@@ -553,13 +553,23 @@ def _build_task(user_message: str, history: list) -> str:
     lines.append(f"\nUser's latest message: {user_message}")
 
     if _is_confirmation(user_message):
-        lines.append(
-            "\nThe user has confirmed the plan with 'yes'. "
-            "DO NOT present the plan again. "
-            "DO NOT ask 'Shall I proceed?' again. "
-            "IMMEDIATELY execute Step 3a: call aggregate_credit_card() with the "
-            "parameters from the confirmed plan above, then Step 3b: call the "
-            "visualization tool, then Step 3c: call final_answer() with the result."
+        # Find the last confirmed plan from history
+        plan_text = ""
+        for m in reversed(prior):
+            if m["role"] == "assistant" and "Here is my plan" in m.get("content", ""):
+                plan_text = m["content"]
+                break
+        return (
+            f"Execute the following confirmed plan immediately.\n\n"
+            f"{plan_text}\n\n"
+            f"INSTRUCTIONS:\n"
+            f"- Do NOT present this plan again.\n"
+            f"- Do NOT ask 'Shall I proceed?' — the user already confirmed.\n"
+            f"- Your first code block MUST call aggregate_credit_card() with the exact "
+            f"parameters listed in the plan above.\n"
+            f"- Your second code block MUST call plot_trend() or generate_chart().\n"
+            f"- Your final step MUST call final_answer() with the chart path.\n"
+            f"- If any parameter is unclear, make a reasonable assumption and proceed."
         )
     else:
         lines.append(
@@ -603,6 +613,16 @@ def run_agent(user_message: str, history: list) -> tuple:
             return history, "Waiting for clarification…", _collect_charts()
     charts_before = set(_collect_charts())
     task = _build_task(user_message, history)
+
+    # When user confirms with "yes", reset agent memory so it starts fresh
+    # with only the execution instruction — prevents the model from getting
+    # confused by the long plan-confirmation history and re-presenting the plan.
+    if _is_confirmation(user_message):
+        try:
+            agent.memory.reset()
+        except Exception:
+            pass
+
     try:
         result = agent.run(task)
     except Exception as e:
