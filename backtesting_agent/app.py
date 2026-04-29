@@ -469,18 +469,35 @@ EXAMPLES = [
 ]
 
 # ── Ambiguity pre-flight check ────────────────────────────────────────────────
-_CLARIFY_SYSTEM = """You are a request parser for a backtesting analysis tool.
-Decide if the user's request is missing critical information needed to proceed.
+def _build_clarify_system() -> str:
+    """Build the pre-flight system prompt, injecting known dataset names from config.yaml."""
+    cfg = _load_config()
+    datasets = cfg.get("datasets", {})
+    targets  = cfg.get("target_variables", {})
 
-The available target variables are: Payment, PurchaseVolume, EOS.
+    dataset_block = ""
+    if datasets:
+        lines = ["Known dataset names (treat any of these as a valid file reference):"]
+        for name, path in datasets.items():
+            lines.append(f"  - \"{name}\" → {path}")
+        dataset_block = "\n" + "\n".join(lines)
+
+    target_names = ", ".join(targets.keys()) if targets else "Payment, PurchaseVolume, EOS"
+
+    return f"""You are a request parser for a backtesting analysis tool.
+Review the FULL conversation and decide if any critical information is STILL unanswered.
+Consider what the user has already provided in prior messages before asking anything.
+{dataset_block}
+
+The available target variables are: {target_names}.
 
 Critical missing information means ANY of the following:
-1. No dataset/file path is provided and none can be inferred from context.
-2. The target variable is ambiguous — the user has not said which one to use
-   (Payment, PurchaseVolume, or EOS) and the request does not make it obvious.
-3. The analysis level is not specified (portfolio or account?) and it changes the output.
+1. No dataset/file path is provided AND the user has not referenced a known dataset name.
+   If the user mentions a known dataset name (e.g. "UM actmt", "round1"), treat it as resolved.
+2. The target variable is ambiguous — not stated and not obvious from context.
+3. The analysis level is not specified (portfolio or account?).
 4. A plot of raw values is requested and it is unclear whether to show actual,
-   predicted, or both — BUT skip this question if the user is asking for MPE or AMPE.
+   predicted, or both — skip this if the user is asking for MPE or AMPE.
 5. EOS is the target — it is unclear whether to use last horizon (stock) or
    average across all horizons (flow).
 
@@ -490,6 +507,8 @@ RULES (follow strictly):
   message. Never ask one question now and save others for later.
 - Keep the combined question under 60 words.
 - If nothing is missing, reply with exactly: PROCEED"""
+
+_CLARIFY_SYSTEM = _build_clarify_system()
 
 
 def _check_ambiguity(user_message: str, history: list) -> str | None:
