@@ -559,17 +559,51 @@ def _build_task(user_message: str, history: list) -> str:
             if m["role"] == "assistant" and "Here is my plan" in m.get("content", ""):
                 plan_text = m["content"]
                 break
+
+        # Inject exact column names from config so the model doesn't guess
+        cfg = _load_config()
+        targets  = cfg.get("target_variables", {})
+        col_info = []
+        for tname, tcols in targets.items():
+            col_info.append(
+                f"  {tname}: actual_column='{tcols.get('actual','')}', "
+                f"predicted_column='{tcols.get('predicted','')}', "
+                f"metric_type='{tcols.get('metric_type','flow')}'"
+            )
+        col_block = "\n".join(col_info) if col_info else "  (see config.yaml)"
+
         return (
-            f"Execute the following confirmed plan immediately.\n\n"
+            f"The user confirmed the plan below. Execute it NOW using the provided tools.\n\n"
             f"{plan_text}\n\n"
-            f"INSTRUCTIONS:\n"
-            f"- Do NOT present this plan again.\n"
-            f"- Do NOT ask 'Shall I proceed?' — the user already confirmed.\n"
-            f"- Your first code block MUST call aggregate_credit_card() with the exact "
-            f"parameters listed in the plan above.\n"
-            f"- Your second code block MUST call plot_trend() or generate_chart().\n"
-            f"- Your final step MUST call final_answer() with the chart path.\n"
-            f"- If any parameter is unclear, make a reasonable assumption and proceed."
+            f"EXACT COLUMN NAMES (from config.yaml — use these, do not guess):\n"
+            f"{col_block}\n\n"
+            f"MANDATORY EXECUTION STEPS — write these exact tool calls:\n"
+            f"Step 1 (code block 1):\n"
+            f"  result = aggregate_credit_card(\n"
+            f"      file_path=<dataset path from plan>,\n"
+            f"      actual_column=<actual_column from above>,\n"
+            f"      predicted_column=<predicted_column from above>,\n"
+            f"      metric_type=<metric_type from above>,\n"
+            f"      dimension=<dimension from plan>,\n"
+            f"      dataset_name='agg_result',\n"
+            f"      level=<level from plan>,\n"
+            f"      row_filter=<filter from plan or empty string>,\n"
+            f"  )\n"
+            f"  print(result)\n\n"
+            f"Step 2 (code block 2):\n"
+            f"  chart_path = plot_trend(\n"
+            f"      x_column=<dimension column from plan>,\n"
+            f"      y_columns='plot_actual,plot_predicted',\n"
+            f"      dataset_name='agg_result',\n"
+            f"      title=<descriptive title>,\n"
+            f"      y_unit='millions',\n"
+            f"  )\n"
+            f"  print(chart_path)\n\n"
+            f"Step 3: final_answer('Data source: <path>\\nChart saved to: <chart_path>')\n\n"
+            f"RULES:\n"
+            f"- Use ONLY aggregate_credit_card and plot_trend — do NOT write raw pandas or matplotlib code.\n"
+            f"- Do NOT re-present the plan. Do NOT ask 'Shall I proceed?' again.\n"
+            f"- Do NOT call final_answer() before Steps 1 and 2 are complete."
         )
     else:
         lines.append(
