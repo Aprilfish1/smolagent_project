@@ -257,11 +257,21 @@ Step 2 — Once all information is collected, confirm the full plan BEFORE calli
 
           Do NOT call any tool until the user replies to this confirmation.
 
-Step 3 — If user replies "yes" → execute the plan exactly as confirmed.
-          CRITICAL: Do NOT call final_answer() saying "executing..." or "please wait".
-          Immediately call the first tool (aggregate_credit_card), then the
-          visualization tool, then call final_answer() with the result summary.
-          Any text output before the tools run is forbidden.
+Step 3 — If user replies "yes" → your VERY FIRST code block MUST call
+          aggregate_credit_card() with the confirmed parameters. Then in a
+          subsequent code block call the visualization tool. Then call
+          final_answer() with a summary of results and the chart path.
+
+          FORBIDDEN after user says "yes":
+          - final_answer("Generating the plot...")   ← forbidden
+          - final_answer("Executing your request...") ← forbidden
+          - final_answer("Please wait...")            ← forbidden
+          - Any final_answer() call before tools have been called ← forbidden
+
+          REQUIRED sequence after "yes":
+          Step 3a: code block → aggregate_credit_card(...)
+          Step 3b: code block → plot_trend(...) or generate_chart(...)
+          Step 3c: final_answer("Data source: ... Chart saved to: ...")
 
 Step 4 — If user replies "no" → ask: "What would you like to change?"
           Return to Step 1 with the correction. Do NOT re-run until confirmed again.
