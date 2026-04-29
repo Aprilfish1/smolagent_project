@@ -534,19 +534,31 @@ def _build_task(user_message: str, history: list) -> str:
     return "\n".join(lines)
 
 
+def _agent_already_engaged(history: list) -> bool:
+    """True if the agent has already responded in this conversation (plan, result, etc.).
+    Pre-flight clarification should only run before the agent is first invoked."""
+    for m in history:
+        if m["role"] != "assistant":
+            continue
+        c = m["content"]
+        if (len(c) > 200
+                or "Here is my plan" in c
+                or "Shall I proceed" in c
+                or "Data source:" in c
+                or "Chart saved" in c):
+            return True
+    return False
+
+
 def run_agent(user_message: str, history: list) -> tuple:
     if not user_message.strip():
         return history, "Enter a request above.", _collect_charts()
     history = history + [{"role": "user", "content": user_message}]
 
-    # Skip pre-flight if the previous assistant message was already a clarifying
-    # question — the user is replying to it, so pass everything to the agent.
-    last_assistant = next(
-        (m["content"] for m in reversed(history[:-1]) if m["role"] == "assistant"), ""
-    )
-    in_clarification = last_assistant.strip().endswith("?") and len(last_assistant) < 300
-
-    if not in_clarification:
+    # Run pre-flight only before the agent has been engaged for the first time.
+    # Once the agent has presented a plan / given any response, all subsequent
+    # messages (yes/no, corrections, new filters) go straight to the agent.
+    if not _agent_already_engaged(history[:-1]):
         clarifying_question = _check_ambiguity(user_message, history[:-1])
         if clarifying_question:
             history = history + [{"role": "assistant", "content": clarifying_question}]
