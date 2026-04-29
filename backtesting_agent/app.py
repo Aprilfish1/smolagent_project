@@ -538,10 +538,19 @@ def run_agent(user_message: str, history: list) -> tuple:
     if not user_message.strip():
         return history, "Enter a request above.", _collect_charts()
     history = history + [{"role": "user", "content": user_message}]
-    clarifying_question = _check_ambiguity(user_message, history[:-1])
-    if clarifying_question:
-        history = history + [{"role": "assistant", "content": clarifying_question}]
-        return history, "Waiting for clarification…", _collect_charts()
+
+    # Skip pre-flight if the previous assistant message was already a clarifying
+    # question — the user is replying to it, so pass everything to the agent.
+    last_assistant = next(
+        (m["content"] for m in reversed(history[:-1]) if m["role"] == "assistant"), ""
+    )
+    in_clarification = last_assistant.strip().endswith("?") and len(last_assistant) < 300
+
+    if not in_clarification:
+        clarifying_question = _check_ambiguity(user_message, history[:-1])
+        if clarifying_question:
+            history = history + [{"role": "assistant", "content": clarifying_question}]
+            return history, "Waiting for clarification…", _collect_charts()
     charts_before = set(_collect_charts())
     task = _build_task(user_message, history)
     try:
