@@ -498,14 +498,14 @@ Critical missing information means ANY of the following:
 3. The analysis level is not specified (portfolio or account?).
 4. A plot of raw values is requested and it is unclear whether to show actual,
    predicted, or both — skip this if the user is asking for MPE or AMPE.
-5. EOS is the target — it is unclear whether to use last horizon (stock) or
-   average across all horizons (flow).
+
+Do NOT ask about EOS stock vs flow logic — the agent will handle that.
 
 RULES (follow strictly):
-- Check ALL five points above in one pass.
+- Check ALL four points above in one pass.
 - If ONE OR MORE pieces are missing, ask about ALL of them in a SINGLE combined
   message. Never ask one question now and save others for later.
-- Keep the combined question under 60 words.
+- Keep the combined question under 80 words.
 - If nothing is missing, reply with exactly: PROCEED"""
 
 _CLARIFY_SYSTEM = _build_clarify_system()
