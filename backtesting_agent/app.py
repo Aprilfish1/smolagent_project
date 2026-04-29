@@ -533,6 +533,14 @@ def _collect_charts() -> list[str]:
     return sorted(pngs, key=os.path.getmtime, reverse=True)
 
 
+_CONFIRM_WORDS = {"yes", "y", "yes.", "yes!", "yep", "proceed", "go", "go ahead",
+                  "ok", "okay", "sure", "correct", "confirmed", "confirm", "do it"}
+
+
+def _is_confirmation(msg: str) -> bool:
+    return msg.strip().lower().rstrip(".!") in _CONFIRM_WORDS
+
+
 def _build_task(user_message: str, history: list) -> str:
     prior = history[:-1]
     if not prior:
@@ -543,13 +551,24 @@ def _build_task(user_message: str, history: list) -> str:
         role = "User" if msg["role"] == "user" else "Assistant"
         lines.append(f"  {role}: {msg['content']}")
     lines.append(f"\nUser's latest message: {user_message}")
-    lines.append(
-        "\nComplete the user's latest request using all context above. "
-        "Do not ask again for clarifications already answered in the conversation. "
-        "However, you MUST still follow the MANDATORY WORKFLOW: present the full "
-        "execution plan and ask 'Shall I proceed? (yes/no)' before calling any tool, "
-        "even if all information is already clear from context."
-    )
+
+    if _is_confirmation(user_message):
+        lines.append(
+            "\nThe user has confirmed the plan with 'yes'. "
+            "DO NOT present the plan again. "
+            "DO NOT ask 'Shall I proceed?' again. "
+            "IMMEDIATELY execute Step 3a: call aggregate_credit_card() with the "
+            "parameters from the confirmed plan above, then Step 3b: call the "
+            "visualization tool, then Step 3c: call final_answer() with the result."
+        )
+    else:
+        lines.append(
+            "\nComplete the user's latest request using all context above. "
+            "Do not ask again for clarifications already answered in the conversation. "
+            "However, you MUST still follow the MANDATORY WORKFLOW: present the full "
+            "execution plan and ask 'Shall I proceed? (yes/no)' before calling any tool, "
+            "even if all information is already clear from context."
+        )
     return "\n".join(lines)
 
 
