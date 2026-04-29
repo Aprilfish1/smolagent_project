@@ -30,7 +30,7 @@ from backtesting_agent.agent import build_agent, _load_config
 SAMPLE_DIR  = Path(__file__).parent / "sample_data"
 ROUND1_PATH = str(SAMPLE_DIR / "ccar_round1.parquet")
 ROUND2_PATH = str(SAMPLE_DIR / "ccar_round2.parquet")
-OUTPUT_DIR  = "./backtesting_output"
+OUTPUT_DIR  = str(Path(__file__).parent.parent / "backtesting_output")
 
 # ── Build agent once at startup ───────────────────────────────────────────────
 _PATH_HINT = f"""

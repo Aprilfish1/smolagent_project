@@ -40,7 +40,7 @@ def _build_column_context(cfg: dict) -> str:
     """Turn config.yaml into a plain-English block injected into system instructions."""
     targets = cfg.get("target_variables", {})
     groups  = cfg.get("default_group_by_columns", [])
-    output_dir = cfg.get("output_dir", "./backtesting_output")
+    output_dir = str(Path(__file__).parent.parent / "backtesting_output")
     datasets = cfg.get("datasets", {})
 
     lines = ["\nProject configuration (from config.yaml)\n" + "-" * 52]

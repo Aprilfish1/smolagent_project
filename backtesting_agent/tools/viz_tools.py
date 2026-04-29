@@ -15,6 +15,7 @@ Dedicated tools:
                  designed for statement_month / performance_month / horizon views
 """
 import os
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -27,7 +28,9 @@ from .data_tools import get_df
 
 sns.set_theme(style="whitegrid", palette="muted")
 
-OUTPUT_DIR = "./backtesting_output"
+# Absolute path so charts always land in the same folder regardless of
+# which directory the script is launched from.
+OUTPUT_DIR = str(Path(__file__).parent.parent.parent / "backtesting_output")
 
 
 def _ensure_output_dir(path: str) -> str:
