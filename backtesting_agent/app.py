@@ -474,16 +474,22 @@ Decide if the user's request is missing critical information needed to proceed.
 
 The available target variables are: Payment, PurchaseVolume, EOS.
 
-Critical missing information means ONE of the following:
+Critical missing information means ANY of the following:
 1. No dataset/file path is provided and none can be inferred from context.
 2. The target variable is ambiguous — the user has not said which one to use
    (Payment, PurchaseVolume, or EOS) and the request does not make it obvious.
 3. The analysis level is not specified (portfolio or account?) and it changes the output.
 4. A plot of raw values is requested and it is unclear whether to show actual,
    predicted, or both — BUT skip this question if the user is asking for MPE or AMPE.
+5. EOS is the target — it is unclear whether to use last horizon (stock) or
+   average across all horizons (flow).
 
-If any critical information is missing, reply with ONLY a short clarifying question.
-If the request is clear enough to proceed, reply with exactly: PROCEED"""
+RULES (follow strictly):
+- Check ALL five points above in one pass.
+- If ONE OR MORE pieces are missing, ask about ALL of them in a SINGLE combined
+  message. Never ask one question now and save others for later.
+- Keep the combined question under 60 words.
+- If nothing is missing, reply with exactly: PROCEED"""
 
 
 def _check_ambiguity(user_message: str, history: list) -> str | None:
@@ -496,7 +502,7 @@ def _check_ambiguity(user_message: str, history: list) -> str | None:
             messages.append({"role": msg["role"], "content": msg["content"]})
         messages.append({"role": "user", "content": user_message})
         resp = litellm.completion(model=model, messages=messages, api_key=api_key,
-                                  max_tokens=120, temperature=0)
+                                  max_tokens=150, temperature=0)
         answer = resp.choices[0].message.content.strip()
         return None if answer.upper().startswith("PROCEED") else answer
     except Exception:
