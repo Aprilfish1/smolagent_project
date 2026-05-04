@@ -172,64 +172,6 @@ EXAMPLES = [
 ]
 
 
-# ── Ambiguity pre-flight check ────────────────────────────────────────────────
-def _build_clarify_system() -> str:
-    cfg      = _load_config()
-    datasets = cfg.get("datasets", {})
-    targets  = cfg.get("target_variables", {})
-
-    dataset_block = ""
-    if datasets:
-        lines = ["Known dataset names (treat any of these as a valid file reference):"]
-        for name, path in datasets.items():
-            lines.append(f"  - \"{name}\" → {path}")
-        dataset_block = "\n" + "\n".join(lines)
-
-    target_names = ", ".join(targets.keys()) if targets else "Payment, PurchaseVolume, EOS"
-
-    return f"""You are a request parser for a backtesting analysis tool.
-Review the FULL conversation and decide if any critical information is STILL unanswered.
-Consider what the user has already provided in prior messages before asking anything.
-{dataset_block}
-
-The available target variables are: {target_names}.
-
-Critical missing information means ANY of the following:
-1. No dataset/file path is provided AND the user has not referenced a known dataset name.
-   If the user mentions a known dataset name (e.g. "round1"), treat it as resolved.
-2. The target variable is ambiguous — not stated and not obvious from context.
-3. The analysis level is not specified (portfolio or account?).
-4. A plot of raw values is requested and it is unclear whether to show actual,
-   predicted, or both — skip this if the user is asking for MPE or AMPE.
-
-Do NOT ask about EOS stock vs flow logic — the agent will handle that.
-
-RULES (follow strictly):
-- Check ALL four points above in one pass.
-- If ONE OR MORE pieces are missing, ask about ALL of them in a SINGLE combined
-  message. Never ask one question now and save others for later.
-- Keep the combined question under 80 words.
-- If nothing is missing, reply with exactly: PROCEED"""
-
-_CLARIFY_SYSTEM = _build_clarify_system()
-
-
-def _check_ambiguity(user_message: str, history: list) -> str | None:
-    try:
-        import litellm
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        model   = os.environ.get("OPENAI_MODEL", "gpt-4o")
-        messages = [{"role": "system", "content": _CLARIFY_SYSTEM}]
-        for msg in history[-4:]:
-            messages.append({"role": msg["role"], "content": msg["content"]})
-        messages.append({"role": "user", "content": user_message})
-        resp = litellm.completion(model=model, messages=messages, api_key=api_key,
-                                  max_tokens=150, temperature=0)
-        answer = resp.choices[0].message.content.strip()
-        return None if answer.upper().startswith("PROCEED") else answer
-    except Exception:
-        return None
-
 
 # ── Chart gallery helpers ─────────────────────────────────────────────────────
 def _collect_charts(since: float = 0.0) -> list[str]:
@@ -251,19 +193,6 @@ _CONFIRM_WORDS = {"yes", "y", "yes.", "yes!", "yep", "proceed", "go", "go ahead"
 def _is_confirmation(msg: str) -> bool:
     return msg.strip().lower().rstrip(".!") in _CONFIRM_WORDS
 
-
-def _agent_already_engaged(history: list) -> bool:
-    for m in history:
-        if m["role"] != "assistant":
-            continue
-        c = m["content"]
-        if (len(c) > 200
-                or "Here is my plan" in c
-                or "Shall I proceed" in c
-                or "Data source:" in c
-                or "Chart saved" in c):
-            return True
-    return False
 
 
 def _build_task(user_message: str, history: list) -> str:
@@ -349,14 +278,6 @@ def run_agent(user_message: str, history: list, dataset_name: str) -> tuple:
         return history, "Enter a request above.", _session_charts(), gr.update(), gr.update()
 
     history = history + [{"role": "user", "content": user_message}]
-
-    # Pre-flight clarification (only before agent is first engaged)
-    if not _agent_already_engaged(history[:-1]):
-        clarifying_question = _check_ambiguity(user_message, history[:-1])
-        if clarifying_question:
-            history = history + [{"role": "assistant", "content": clarifying_question}]
-            return (history, "Waiting for clarification…",
-                    _session_charts(), gr.update(), gr.update())
 
     charts_before = set(_collect_charts())
     task = _build_task(user_message, history)
