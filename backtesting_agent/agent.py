@@ -61,6 +61,13 @@ def _build_column_context(cfg: dict) -> str:
     if groups:
         lines.append(f"\nDefault segmentation columns (use when user says 'by segment'): {', '.join(groups)}")
 
+    row_filter = cfg.get("default_row_filter", "")
+    if row_filter:
+        lines.append(
+            f"\nDefault row filter — ALWAYS pass this as row_filter to aggregate_credit_card "
+            f"unless the user explicitly asks to remove or change it:\n  \"{row_filter}\""
+        )
+
     lines.append(f"Default output directory for charts: {output_dir}")
     return "\n".join(lines)
 

@@ -75,12 +75,14 @@ def generate_summary_charts(dataset_name: str):
     except ImportError:
         return None
 
-    cfg       = _load_config()
-    datasets  = cfg.get("datasets", {})
-    targets   = cfg.get("target_variables", {})
-    time_cols = cfg.get("time_columns", {})
-    stmt_col  = time_cols.get("statement_month", "statement_month")
+    cfg         = _load_config()
+    datasets    = cfg.get("datasets", {})
+    targets     = cfg.get("target_variables", {})
+    time_cols   = cfg.get("time_columns", {})
+    stmt_col    = time_cols.get("statement_month", "statement_month")
     horizon_col = time_cols.get("horizon", "horizon")
+    perf_col    = time_cols.get("performance_month", "performance_month")
+    row_filter  = cfg.get("default_row_filter", "")
 
     path = datasets.get(dataset_name, "")
     if not path or not os.path.exists(path):
@@ -112,8 +114,17 @@ def generate_summary_charts(dataset_name: str):
         agg_label = "sum" if metric_type == "flow" else "avg"
 
         try:
-            needed = list({stmt_col, horizon_col, actual_col, pred_col})
+            needed = list({stmt_col, horizon_col, perf_col, actual_col, pred_col})
             lf = pl.scan_parquet(path).select(needed)
+
+            # Apply default row filter from config.yaml
+            if row_filter:
+                df_raw = lf.collect().to_pandas()
+                try:
+                    df_raw = df_raw.query(row_filter)
+                except Exception:
+                    pass
+                lf = pl.from_pandas(df_raw).lazy()
 
             # Step 1: portfolio sum per (statement_month, horizon)
             agg1 = (
@@ -207,6 +218,8 @@ def _compute_mpe_summary(dataset_name: str) -> str:
     time_cols   = cfg.get("time_columns", {})
     stmt_col    = time_cols.get("statement_month", "statement_month")
     horizon_col = time_cols.get("horizon", "horizon")
+    perf_col    = time_cols.get("performance_month", "performance_month")
+    row_filter  = cfg.get("default_row_filter", "")
 
     path = datasets.get(dataset_name, "")
     if not path or not os.path.exists(path):
@@ -226,8 +239,17 @@ def _compute_mpe_summary(dataset_name: str) -> str:
         metric_type = cols.get("metric_type", "flow")
         agg_fn = "sum" if metric_type == "flow" else "mean"
         try:
-            needed = list({stmt_col, horizon_col, actual_col, pred_col})
+            needed = list({stmt_col, horizon_col, perf_col, actual_col, pred_col})
             lf = pl.scan_parquet(path).select(needed)
+
+            # Apply default row filter from config.yaml
+            if row_filter:
+                df_raw = lf.collect().to_pandas()
+                try:
+                    df_raw = df_raw.query(row_filter)
+                except Exception:
+                    pass
+                lf = pl.from_pandas(df_raw).lazy()
 
             # Step 1: portfolio sum per (statement_month, horizon)
             agg1 = (

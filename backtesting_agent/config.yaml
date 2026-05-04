@@ -62,6 +62,16 @@ default_group_by_columns:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Default row filter (pandas query syntax)
+# Applied automatically to ALL analyses — both summary charts and agent requests.
+# Conditions:
+#   1. horizon <= 28
+#   2. (statement_month <= 2020-02-01 AND performance_month <= 2020-02-01)
+#      OR statement_month >= 2021-07-01
+# ─────────────────────────────────────────────────────────────────────────────
+default_row_filter: "horizon <= 28 and ((statement_month <= '2020-02-01' and performance_month <= '2020-02-01') or statement_month >= '2021-07-01')"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Output directory for all generated charts
 # ─────────────────────────────────────────────────────────────────────────────
 output_dir: ./backtesting_output
