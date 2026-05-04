@@ -102,16 +102,14 @@ def generate_summary_charts(dataset_name: str):
         axes = [axes]
 
     MAX_HORIZONS = 28
-    colors = {"actual": "#4c72b0", "predicted": "#dd8452"}
+    BAR_COLOR = "#4c72b0"
 
     for ax, (target_name, cols) in zip(axes, targets.items()):
         actual_col  = cols.get("actual", "")
         pred_col    = cols.get("predicted", "")
         metric_type = cols.get("metric_type", "flow")
-        # flow (Payment, PurchaseVolume) → sum across horizons per stmt_month
-        # stock (EOS) → average across horizons per stmt_month
-        agg_fn = "sum" if metric_type == "flow" else "mean"
-        agg_label = "sum" if metric_type == "flow" else "avg"
+        agg_fn      = "sum" if metric_type == "flow" else "mean"
+        agg_label   = "sum" if metric_type == "flow" else "avg"
 
         try:
             needed = list({stmt_col, horizon_col, perf_col, actual_col, pred_col})
@@ -151,36 +149,40 @@ def generate_summary_charts(dataset_name: str):
                     .reset_index(drop=True)
             )
 
+            # Compute MPE (%)
+            agg2["mpe"] = np.where(
+                agg2["act"] != 0,
+                (agg2["pred"] - agg2["act"]) / agg2["act"] * 100,
+                float("nan"),
+            )
+
             complete   = agg2["max_h"] >= MAX_HORIZONS
             incomplete = ~complete
 
             labels = [str(d)[:7] for d in agg2[stmt_col]]
             x      = np.arange(len(labels))
-            width  = 0.35
+            width  = 0.6
 
             # Complete months — solid bars
             if complete.any():
-                ax.bar(x[complete] - width / 2, agg2.loc[complete, "act"]  / 1e6, width,
-                       color=colors["actual"],    alpha=0.85, label="Actual")
-                ax.bar(x[complete] + width / 2, agg2.loc[complete, "pred"] / 1e6, width,
-                       color=colors["predicted"], alpha=0.85, label="Predicted")
+                ax.bar(x[complete], agg2.loc[complete, "mpe"], width,
+                       color=BAR_COLOR, alpha=0.85, label="Complete (28 horizons)")
 
             # Incomplete months — hatched bars
             if incomplete.any():
-                ax.bar(x[incomplete] - width / 2, agg2.loc[incomplete, "act"]  / 1e6, width,
-                       color=colors["actual"],    alpha=0.5, hatch="//",
-                       label="Actual (< 28 horizons)")
-                ax.bar(x[incomplete] + width / 2, agg2.loc[incomplete, "pred"] / 1e6, width,
-                       color=colors["predicted"], alpha=0.5, hatch="//",
-                       label="Predicted (< 28 horizons)")
+                ax.bar(x[incomplete], agg2.loc[incomplete, "mpe"], width,
+                       color=BAR_COLOR, alpha=0.5, hatch="//",
+                       label="Incomplete (< 28 horizons)")
+
+            ax.axhline(y=0, color="black", linewidth=0.8, linestyle="--")
 
             # Thin out x-tick labels so they don't overlap
             step = max(1, len(labels) // 12)
             ax.set_xticks(x[::step])
             ax.set_xticklabels(labels[::step], rotation=45, ha="right", fontsize=8)
-            ax.set_ylabel("Value ($M)")
+            ax.set_ylabel("MPE (%)")
             ax.set_title(
-                f"{target_name}\nActual vs Predicted by Statement Month\n"
+                f"{target_name} MPE by Statement Month\n"
                 f"(Portfolio level, {agg_label} across horizons)",
                 fontsize=10,
             )
@@ -194,7 +196,7 @@ def generate_summary_charts(dataset_name: str):
             ax.set_title(target_name)
 
     fig.suptitle(
-        f"Dataset: {dataset_name} — Portfolio Summary (avg across horizons)",
+        f"Dataset: {dataset_name} — Portfolio MPE Summary by Statement Month",
         fontsize=13, y=1.01,
     )
     plt.tight_layout(rect=[0, 0, 1, 0.99])
