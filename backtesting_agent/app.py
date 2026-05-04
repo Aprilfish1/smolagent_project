@@ -448,27 +448,29 @@ Output charts saved to: `{os.path.abspath(OUTPUT_DIR)}`
 if __name__ == "__main__":
     import signal, subprocess, platform
 
-    # Kill any process already using port 7860
+    # Single place to change the port — override with GRADIO_PORT env var if needed
+    _PORT = int(os.environ.get("GRADIO_PORT", 7860))
+
+    # Kill any process already using that port
     try:
         if platform.system() == "Darwin":
-            result = subprocess.run(["lsof", "-ti", "tcp:7860"], capture_output=True, text=True)
+            result = subprocess.run(["lsof", "-ti", f"tcp:{_PORT}"], capture_output=True, text=True)
             for pid in result.stdout.strip().splitlines():
                 try:
                     os.kill(int(pid), signal.SIGKILL)
                 except Exception:
                     pass
         else:
-            subprocess.run(["fuser", "-k", "7860/tcp"], capture_output=True)
+            subprocess.run(["fuser", "-k", f"{_PORT}/tcp"], capture_output=True)
     except Exception:
         pass
 
     # JupyterHub proxy support
     _jupyter_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "").rstrip("/")
-    _root_path = f"{_jupyter_prefix}/proxy/7860" if _jupyter_prefix else ""
+    _root_path = f"{_jupyter_prefix}/proxy/{_PORT}" if _jupyter_prefix else ""
 
     demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
+        server_port=_PORT,
         root_path=_root_path,
         share=False,
         inbrowser=False,
