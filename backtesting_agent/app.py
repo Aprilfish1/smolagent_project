@@ -99,11 +99,17 @@ def generate_summary_charts(dataset_name: str):
     if n == 1:
         axes = [axes]
 
+    MAX_HORIZONS = 28
     colors = {"actual": "#4c72b0", "predicted": "#dd8452"}
 
     for ax, (target_name, cols) in zip(axes, targets.items()):
-        actual_col = cols.get("actual", "")
-        pred_col   = cols.get("predicted", "")
+        actual_col  = cols.get("actual", "")
+        pred_col    = cols.get("predicted", "")
+        metric_type = cols.get("metric_type", "flow")
+        # flow (Payment, PurchaseVolume) → sum across horizons per stmt_month
+        # stock (EOS) → average across horizons per stmt_month
+        agg_fn = "sum" if metric_type == "flow" else "mean"
+        agg_label = "sum" if metric_type == "flow" else "avg"
 
         try:
             needed = list({stmt_col, horizon_col, actual_col, pred_col})
@@ -118,22 +124,44 @@ def generate_summary_charts(dataset_name: str):
                   .to_pandas()
             )
 
-            # Step 2: average across horizons per statement_month
+            # Track max horizon per statement_month to detect incomplete months
+            max_h = (
+                agg1.groupby(stmt_col, as_index=False)[horizon_col]
+                    .max()
+                    .rename(columns={horizon_col: "max_h"})
+            )
+
+            # Step 2: aggregate across horizons per statement_month
             agg2 = (
                 agg1.groupby(stmt_col, as_index=False)
-                    .agg({"act": "mean", "pred": "mean"})
+                    .agg({"act": agg_fn, "pred": agg_fn})
+                    .merge(max_h, on=stmt_col)
                     .sort_values(stmt_col)
                     .reset_index(drop=True)
             )
+
+            complete   = agg2["max_h"] >= MAX_HORIZONS
+            incomplete = ~complete
 
             labels = [str(d)[:7] for d in agg2[stmt_col]]
             x      = np.arange(len(labels))
             width  = 0.35
 
-            ax.bar(x - width / 2, agg2["act"]  / 1e6, width,
-                   label="Actual",    color=colors["actual"],    alpha=0.85)
-            ax.bar(x + width / 2, agg2["pred"] / 1e6, width,
-                   label="Predicted", color=colors["predicted"], alpha=0.85)
+            # Complete months — solid bars
+            if complete.any():
+                ax.bar(x[complete] - width / 2, agg2.loc[complete, "act"]  / 1e6, width,
+                       color=colors["actual"],    alpha=0.85, label="Actual")
+                ax.bar(x[complete] + width / 2, agg2.loc[complete, "pred"] / 1e6, width,
+                       color=colors["predicted"], alpha=0.85, label="Predicted")
+
+            # Incomplete months — hatched bars
+            if incomplete.any():
+                ax.bar(x[incomplete] - width / 2, agg2.loc[incomplete, "act"]  / 1e6, width,
+                       color=colors["actual"],    alpha=0.5, hatch="//",
+                       label="Actual (< 28 horizons)")
+                ax.bar(x[incomplete] + width / 2, agg2.loc[incomplete, "pred"] / 1e6, width,
+                       color=colors["predicted"], alpha=0.5, hatch="//",
+                       label="Predicted (< 28 horizons)")
 
             # Thin out x-tick labels so they don't overlap
             step = max(1, len(labels) // 12)
@@ -142,10 +170,10 @@ def generate_summary_charts(dataset_name: str):
             ax.set_ylabel("Value ($M)")
             ax.set_title(
                 f"{target_name}\nActual vs Predicted by Statement Month\n"
-                f"(Portfolio level, avg across horizons)",
+                f"(Portfolio level, {agg_label} across horizons)",
                 fontsize=10,
             )
-            ax.legend(fontsize=8)
+            ax.legend(fontsize=7)
             ax.grid(True, alpha=0.3, axis="y")
 
         except Exception as e:
@@ -184,13 +212,19 @@ def _compute_mpe_summary(dataset_name: str) -> str:
     if not path or not os.path.exists(path):
         return f"Dataset '{dataset_name}' not found at: {path}"
 
-    lines = [
-        f"**Dataset: {dataset_name}** — Portfolio MPE Summary (avg across horizons, all statement months)\n"
-    ]
+    header = (
+        f"**Dataset: {dataset_name}** — Portfolio MPE Summary "
+        f"(avg across horizons, all statement months)\n\n"
+        f"| Target | MPE | AMPE |\n"
+        f"|---|---:|---:|"
+    )
+    rows = []
 
     for target_name, cols in targets.items():
-        actual_col = cols.get("actual", "")
-        pred_col   = cols.get("predicted", "")
+        actual_col  = cols.get("actual", "")
+        pred_col    = cols.get("predicted", "")
+        metric_type = cols.get("metric_type", "flow")
+        agg_fn = "sum" if metric_type == "flow" else "mean"
         try:
             needed = list({stmt_col, horizon_col, actual_col, pred_col})
             lf = pl.scan_parquet(path).select(needed)
@@ -204,10 +238,10 @@ def _compute_mpe_summary(dataset_name: str) -> str:
                   .to_pandas()
             )
 
-            # Step 2: average across horizons per statement_month
+            # Step 2: sum (flow) or average (stock) across horizons per stmt_month
             agg2 = (
                 agg1.groupby(stmt_col, as_index=False)
-                    .agg({"act": "mean", "pred": "mean"})
+                    .agg({"act": agg_fn, "pred": agg_fn})
             )
 
             # Step 3: MPE per statement month → mean across all months
@@ -218,24 +252,19 @@ def _compute_mpe_summary(dataset_name: str) -> str:
             )
             mean_mpe  = float(np.nanmean(mpe))
             mean_ampe = float(np.nanmean(np.abs(mpe)))
-            lines.append(
-                f"- **{target_name}**: Mean MPE = {mean_mpe:+.2f}%,  Mean AMPE = {mean_ampe:.2f}%"
-            )
+            rows.append(f"| {target_name} | {mean_mpe:+.2f}% | {mean_ampe:.2f}% |")
         except Exception as e:
-            lines.append(f"- **{target_name}**: Error — {e}")
+            rows.append(f"| {target_name} | Error | {e} |")
 
-    lines.append(
-        "\nThe charts on the left show the full trend by statement month. "
-        "Send a request below to start your analysis."
-    )
-    return "\n".join(lines)
+    footer = "\n\nThe charts on the left show the full trend by statement month. Send a request below to start your analysis."
+    return header + "\n" + "\n".join(rows) + footer
 
 
 def _load_summary(dataset_name: str) -> tuple:
     """Return (summary_fig, initial_chatbot_history) for a given dataset."""
     fig     = generate_summary_charts(dataset_name)
     msg     = _compute_mpe_summary(dataset_name)
-    history = [(None, msg)] if msg else []
+    history = [{"role": "assistant", "content": msg}] if msg else []
     return fig, history
 
 
