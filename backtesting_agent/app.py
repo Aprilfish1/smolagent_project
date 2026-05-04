@@ -95,7 +95,7 @@ def generate_summary_charts(dataset_name: str):
         return None
 
     n   = len(targets)
-    fig, axes = plt.subplots(1, n, figsize=(7 * n, 5))
+    fig, axes = plt.subplots(n, 1, figsize=(10, 5 * n))
     if n == 1:
         axes = [axes]
 
@@ -156,10 +156,87 @@ def generate_summary_charts(dataset_name: str):
 
     fig.suptitle(
         f"Dataset: {dataset_name} — Portfolio Summary (avg across horizons)",
-        fontsize=12, y=1.02,
+        fontsize=13, y=1.01,
     )
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.99])
     return fig
+
+
+# ── MPE summary for chatbox opening message ───────────────────────────────────
+def _compute_mpe_summary(dataset_name: str) -> str:
+    """Compute mean MPE and AMPE per target variable across all statement months
+    using the same avg-across-horizons logic as the summary charts."""
+    if not dataset_name:
+        return ""
+    try:
+        import polars as pl
+    except ImportError:
+        return ""
+
+    cfg         = _load_config()
+    datasets    = cfg.get("datasets", {})
+    targets     = cfg.get("target_variables", {})
+    time_cols   = cfg.get("time_columns", {})
+    stmt_col    = time_cols.get("statement_month", "statement_month")
+    horizon_col = time_cols.get("horizon", "horizon")
+
+    path = datasets.get(dataset_name, "")
+    if not path or not os.path.exists(path):
+        return f"Dataset '{dataset_name}' not found at: {path}"
+
+    lines = [
+        f"**Dataset: {dataset_name}** — Portfolio MPE Summary (avg across horizons, all statement months)\n"
+    ]
+
+    for target_name, cols in targets.items():
+        actual_col = cols.get("actual", "")
+        pred_col   = cols.get("predicted", "")
+        try:
+            needed = list({stmt_col, horizon_col, actual_col, pred_col})
+            lf = pl.scan_parquet(path).select(needed)
+
+            # Step 1: portfolio sum per (statement_month, horizon)
+            agg1 = (
+                lf.group_by([stmt_col, horizon_col])
+                  .agg([pl.col(actual_col).sum().alias("act"),
+                        pl.col(pred_col).sum().alias("pred")])
+                  .collect()
+                  .to_pandas()
+            )
+
+            # Step 2: average across horizons per statement_month
+            agg2 = (
+                agg1.groupby(stmt_col, as_index=False)
+                    .agg({"act": "mean", "pred": "mean"})
+            )
+
+            # Step 3: MPE per statement month → mean across all months
+            mpe = np.where(
+                agg2["act"] != 0,
+                (agg2["pred"] - agg2["act"]) / agg2["act"] * 100,
+                float("nan"),
+            )
+            mean_mpe  = float(np.nanmean(mpe))
+            mean_ampe = float(np.nanmean(np.abs(mpe)))
+            lines.append(
+                f"- **{target_name}**: Mean MPE = {mean_mpe:+.2f}%,  Mean AMPE = {mean_ampe:.2f}%"
+            )
+        except Exception as e:
+            lines.append(f"- **{target_name}**: Error — {e}")
+
+    lines.append(
+        "\nThe charts on the left show the full trend by statement month. "
+        "Send a request below to start your analysis."
+    )
+    return "\n".join(lines)
+
+
+def _load_summary(dataset_name: str) -> tuple:
+    """Return (summary_fig, initial_chatbot_history) for a given dataset."""
+    fig     = generate_summary_charts(dataset_name)
+    msg     = _compute_mpe_summary(dataset_name)
+    history = [(None, msg)] if msg else []
+    return fig, history
 
 
 # ── Example prompts ───────────────────────────────────────────────────────────
@@ -311,8 +388,8 @@ def run_agent(user_message: str, history: list, dataset_name: str) -> tuple:
 
 def clear_all(dataset_name: str) -> tuple:
     """
-    Returns: (history, status, gallery_value, gallery_visible, summary_fig, summary_visible)
-    Resets session and restores summary chart.
+    Returns: (chatbot, status, gallery_value, gallery_visible, summary_fig, summary_visible)
+    Resets session, restores summary chart and opening MPE message.
     """
     global _session_start_time
     _session_start_time = time.time()
@@ -320,8 +397,9 @@ def clear_all(dataset_name: str) -> tuple:
         agent.memory.reset()
     except Exception:
         pass
-    summary_fig = generate_summary_charts(dataset_name)
-    return ([], "Ready.",
+    summary_fig, opening_history = _load_summary(dataset_name)
+    return (opening_history,                            # chatbot with opening message
+            "Ready.",
             [],                                         # gallery value (empty)
             gr.update(visible=False),                   # gallery hidden
             gr.update(value=summary_fig, visible=True)) # summary shown
@@ -331,8 +409,7 @@ def clear_all(dataset_name: str) -> tuple:
 _dataset_choices = _get_dataset_choices()
 _default_dataset = _dataset_choices[0] if _dataset_choices else None
 
-with gr.Blocks(title="CCAR Backtesting Agent",
-               theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate")) as demo:
+with gr.Blocks(title="CCAR Backtesting Agent") as demo:
 
     gr.Markdown("# CCAR Backtesting Analysis Agent")
 
@@ -342,33 +419,15 @@ with gr.Blocks(title="CCAR Backtesting Agent",
             choices=_dataset_choices,
             value=_default_dataset,
             label="Dataset",
-            info="Select a dataset — summary charts will load automatically.",
-            scale=1,
-            min_width=200,
+            scale=0,
+            min_width=160,
         )
 
     # ── Main layout ───────────────────────────────────────────────────────────
     with gr.Row():
 
-        # Left: chatbox
+        # Left: summary (shown on load) / gallery (shown after first request)
         with gr.Column(scale=3):
-            chatbot = gr.Chatbot(label="Conversation", height=520, type="messages")
-            with gr.Row():
-                msg_box = gr.Textbox(
-                    placeholder="e.g. Show me Payment MPE by statement month at portfolio level…",
-                    label="Your request", scale=5, lines=2, autofocus=True)
-                with gr.Column(scale=1, min_width=120):
-                    submit_btn = gr.Button("▶ Run", variant="primary")
-                    clear_btn  = gr.Button("🗑 Clear")
-            status_box = gr.Textbox(label="Status", interactive=False, lines=1)
-
-            gr.Markdown("### Quick-start examples")
-            for ex in EXAMPLES:
-                gr.Button(ex[:90] + "…", size="sm").click(
-                    fn=lambda e=ex: e, outputs=msg_box)
-
-        # Right: summary (shown on load) / gallery (shown after first request)
-        with gr.Column(scale=2):
 
             # Summary plot — visible by default
             summary_plot = gr.Plot(
@@ -387,6 +446,23 @@ with gr.Blocks(title="CCAR Backtesting Agent",
             )
             refresh_btn = gr.Button("🔄 Refresh Gallery", size="sm", visible=False)
 
+        # Right: chatbox
+        with gr.Column(scale=2):
+            chatbot = gr.Chatbot(label="Conversation", height=520)
+            with gr.Row():
+                msg_box = gr.Textbox(
+                    placeholder="e.g. Show me Payment MPE by statement month at portfolio level…",
+                    label="Your request", scale=5, lines=2, autofocus=True)
+                with gr.Column(scale=1, min_width=120):
+                    submit_btn = gr.Button("▶ Run", variant="primary")
+                    clear_btn  = gr.Button("🗑 Clear")
+            status_box = gr.Textbox(label="Status", interactive=False, lines=1)
+
+            gr.Markdown("### Quick-start examples")
+            for ex in EXAMPLES:
+                gr.Button(ex[:90] + "…", size="sm").click(
+                    fn=lambda e=ex: e, outputs=msg_box)
+
     with gr.Accordion("📁 Sample data file paths", open=False):
         gr.Markdown(f"""
 Copy these paths into your requests:
@@ -401,17 +477,18 @@ Output charts saved to: `{os.path.abspath(OUTPUT_DIR)}`
 
     # ── Events ────────────────────────────────────────────────────────────────
 
-    # Dataset change → regenerate summary, restore summary view
+    # Dataset change → regenerate summary + opening message, restore summary view
     def on_dataset_change(dataset_name):
-        fig = generate_summary_charts(dataset_name)
+        fig, opening_history = _load_summary(dataset_name)
         return (gr.update(value=fig, visible=True),   # summary shown
                 gr.update(visible=False),              # gallery hidden
-                gr.update(visible=False))              # refresh btn hidden
+                gr.update(visible=False),              # refresh btn hidden
+                opening_history)                       # chatbot reset with opening message
 
     dataset_dropdown.change(
         fn=on_dataset_change,
         inputs=[dataset_dropdown],
-        outputs=[summary_plot, gallery, refresh_btn],
+        outputs=[summary_plot, gallery, refresh_btn, chatbot],
     )
 
     # Submit / Enter → run agent, switch to gallery
@@ -437,11 +514,11 @@ Output charts saved to: `{os.path.abspath(OUTPUT_DIR)}`
     # Refresh gallery (only meaningful when gallery is visible)
     refresh_btn.click(fn=_session_charts, outputs=gallery)
 
-    # Auto-load summary on page open
+    # Auto-load summary + opening message on page open
     demo.load(
-        fn=generate_summary_charts,
+        fn=_load_summary,
         inputs=[dataset_dropdown],
-        outputs=[summary_plot],
+        outputs=[summary_plot, chatbot],
     )
 
 
@@ -474,4 +551,5 @@ if __name__ == "__main__":
         root_path=_root_path,
         share=False,
         inbrowser=False,
+        theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate"),
     )
