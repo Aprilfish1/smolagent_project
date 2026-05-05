@@ -20,10 +20,7 @@
 #   (spaces in names are replaced with underscores)
 # ─────────────────────────────────────────────────────────────────────────────
 datasets:
-  CCAR:
-    Round1: backtesting_agent/sample_data/ccar_round1.parquet
-    Round2: backtesting_agent/sample_data/ccar_round2.parquet
-  # Add more markets and segments below.  Example:
+  # Add your markets and segments here.  Example structure:
   # US:
   #   Retail: path/to/us_retail_backtest.parquet
   #   Premium: path/to/us_premium_backtest.parquet
