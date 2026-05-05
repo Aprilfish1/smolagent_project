@@ -296,14 +296,22 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
         f"Use this path when the user says 'the dataset', 'this dataset', or does not specify a path.\n"
     )
 
-    prior = history[:-1]
+    import re as _re
+
+    # ── Plan reminder (non-confirmation messages) ─────────────────────────────
     _plan_reminder = (
-        "\n\nMANDATORY — YOU MUST DO THIS AND ONLY THIS RIGHT NOW:\n"
-        "Call final_answer() with the full plan text (using the format in your instructions) "
-        "and ask 'Shall I proceed? (yes / no)' at the end.\n"
-        "Do NOT call aggregate_credit_card, plot_trend, inspect_parquet, or any other tool. "
-        "Do NOT write any code that calls a tool. ONLY call final_answer()."
+        "\n\nMANDATORY — YOU MUST DO EXACTLY ONE OF THESE RIGHT NOW:\n"
+        "A) If ANY required information is still missing or ambiguous "
+        "(target variable, level, dimension, etc.): call final_answer() with ONE "
+        "combined question asking for all missing details.\n"
+        "B) If you have all the information needed: call final_answer() with the "
+        "complete plan in the format specified in your instructions and ask "
+        "'Shall I proceed? (yes / no)' at the end.\n"
+        "In either case, do NOT call aggregate_credit_card, plot_trend, "
+        "inspect_parquet, or any other tool. ONLY call final_answer()."
     )
+
+    prior = history[:-1]
 
     if not prior:
         return dataset_context + "\n" + user_message + _plan_reminder
@@ -317,70 +325,94 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
     lines.append(f"\nUser's latest message: {user_message}")
 
     if _is_confirmation(user_message):
+        # ── Find the most recent plan in history ──────────────────────────────
         plan_text = ""
         for m in reversed(prior):
             if m["role"] == "assistant" and "Here is my plan" in m.get("content", ""):
                 plan_text = m["content"]
                 break
 
-        cfg      = _load_config()
-        targets  = cfg.get("target_variables", {})
-        col_info = []
-        for tname, tcols in targets.items():
-            col_info.append(
-                f"  {tname}: actual_column='{tcols.get('actual','')}', "
-                f"predicted_column='{tcols.get('predicted','')}', "
-                f"metric_type='{tcols.get('metric_type','flow')}'"
-            )
-        col_block = "\n".join(col_info) if col_info else "  (see config.yaml)"
+        # ── Parse plan fields so we can inject concrete values ────────────────
+        def _field(pattern, text, default=""):
+            m = _re.search(pattern, text, _re.IGNORECASE)
+            return m.group(1).strip() if m else default
 
-        # Derive y_columns from the confirmed metric in the plan
-        import re as _re
-        _metric_match = _re.search(r"Metric\s*:\s*(.+)", plan_text, _re.IGNORECASE)
-        _metric_val   = _metric_match.group(1).strip().lower() if _metric_match else ""
-        if "predicted only" in _metric_val:
+        plan_dataset   = _field(r"Dataset\s*:\s*(.+)",    plan_text, parquet)
+        plan_target    = _field(r"Target\s*:\s*(.+)",     plan_text)
+        plan_metric    = _field(r"Metric\s*:\s*(.+)",     plan_text).lower()
+        plan_dimension = _field(r"Dimension\s*:\s*(.+)",  plan_text, "statement_month").lower().strip()
+        plan_level     = _field(r"Level\s*:\s*(.+)",      plan_text, "portfolio").lower().strip()
+        plan_filter    = _field(r"Filter\s*:\s*(.+)",     plan_text)
+
+        # Normalise filter
+        if plan_filter.lower() in ("none", "n/a", ""):
+            plan_filter = ""
+
+        # Resolve target columns from config
+        cfg     = _load_config()
+        targets = cfg.get("target_variables", {}) or {}
+        target_cols = None
+        for tname, tcols in targets.items():
+            if tname.lower() == plan_target.lower():
+                target_cols = tcols
+                plan_target = tname
+                break
+        if not target_cols and targets:
+            plan_target, target_cols = next(iter(targets.items()))
+
+        actual_col  = target_cols["actual"]   if target_cols else "actual"
+        pred_col    = target_cols["predicted"] if target_cols else "predicted"
+        metric_type = target_cols.get("metric_type", "flow") if target_cols else "flow"
+
+        # y_columns from parsed metric
+        if "predicted only" in plan_metric:
             y_columns = "plot_predicted"
-        elif "actual only" in _metric_val:
+        elif "actual only" in plan_metric:
             y_columns = "plot_actual"
-        elif "ampe" in _metric_val:
+        elif "ampe" in plan_metric:
             y_columns = "AMPE"
-        elif "mpe" in _metric_val:
+        elif "mpe" in plan_metric:
             y_columns = "MPE"
         else:
             y_columns = "plot_actual,plot_predicted"
 
+        # y_unit from level + metric
+        if "mpe" in plan_metric or "ampe" in plan_metric:
+            y_unit = "percent"
+        elif plan_level == "account":
+            y_unit = ""
+        else:
+            y_unit = "millions"
+
         return (
             f"{dataset_context}\n"
-            f"The user confirmed the plan below. Execute it NOW using the provided tools.\n\n"
-            f"{plan_text}\n\n"
-            f"EXACT COLUMN NAMES (from config.yaml — use these, do not guess):\n"
-            f"{col_block}\n\n"
-            f"MANDATORY EXECUTION STEPS — write these exact tool calls:\n"
-            f"Step 1 (code block 1):\n"
-            f"  result = aggregate_credit_card(\n"
-            f"      file_path=<dataset path from plan>,\n"
-            f"      actual_column=<actual_column from above>,\n"
-            f"      predicted_column=<predicted_column from above>,\n"
-            f"      metric_type=<metric_type from above>,\n"
-            f"      dimension=<dimension from plan>,\n"
-            f"      dataset_name='agg_result',\n"
-            f"      level=<level from plan>,\n"
-            f"      row_filter=<filter from plan or empty string>,\n"
-            f"  )\n"
-            f"  print(result)\n\n"
-            f"Step 2 (code block 2):\n"
-            f"  chart_path = plot_trend(\n"
-            f"      x_column=<dimension column from plan>,\n"
-            f"      y_columns='{y_columns}',\n"
-            f"      dataset_name='agg_result',\n"
-            f"      title=<descriptive title>,\n"
-            f"      y_unit='millions',\n"
-            f"  )\n"
-            f"  print(chart_path)\n\n"
-            f"Step 3: final_answer('Data source: <path>\\nChart saved to: <chart_path>')\n\n"
+            f"The user confirmed the plan. Execute it NOW — follow these EXACT steps:\n\n"
+            f"CONFIRMED PLAN:\n{plan_text}\n\n"
+            f"STEP 1 — Run this exact code:\n"
+            f"result = aggregate_credit_card(\n"
+            f"    file_path='{plan_dataset}',\n"
+            f"    actual_column='{actual_col}',\n"
+            f"    predicted_column='{pred_col}',\n"
+            f"    metric_type='{metric_type}',\n"
+            f"    dimension='{plan_dimension}',\n"
+            f"    dataset_name='agg_result',\n"
+            f"    level='{plan_level}',\n"
+            f"    row_filter='{plan_filter}',\n"
+            f")\n"
+            f"print(result)\n\n"
+            f"STEP 2 — Then run this exact code:\n"
+            f"chart_path = plot_trend(\n"
+            f"    x_column='{plan_dimension}',\n"
+            f"    y_columns='{y_columns}',\n"
+            f"    dataset_name='agg_result',\n"
+            f"    title='{plan_target} {plan_metric.title()} by {plan_dimension.replace('_', ' ').title()} ({plan_level.title()} Level)',\n"
+            f"    y_unit='{y_unit}',\n"
+            f")\n"
+            f"print(chart_path)\n\n"
+            f"STEP 3 — Call: final_answer('Data source: {plan_dataset}\\nChart saved to: ' + str(chart_path))\n\n"
             f"RULES:\n"
-            f"- Use ONLY aggregate_credit_card and plot_trend — do NOT write raw pandas or matplotlib code.\n"
-            f"- Do NOT re-present the plan. Do NOT ask 'Shall I proceed?' again.\n"
+            f"- Copy the code above EXACTLY. Do not change any parameter values.\n"
+            f"- Do NOT re-present the plan or ask 'Shall I proceed?' again.\n"
             f"- Do NOT call final_answer() before Steps 1 and 2 are complete."
         )
     else:
