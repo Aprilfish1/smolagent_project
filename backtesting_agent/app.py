@@ -297,17 +297,16 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
     )
 
     prior = history[:-1]
+    _plan_reminder = (
+        "\n\nMANDATORY — YOU MUST DO THIS AND ONLY THIS RIGHT NOW:\n"
+        "Call final_answer() with the full plan text (using the format in your instructions) "
+        "and ask 'Shall I proceed? (yes / no)' at the end.\n"
+        "Do NOT call aggregate_credit_card, plot_trend, inspect_parquet, or any other tool. "
+        "Do NOT write any code that calls a tool. ONLY call final_answer()."
+    )
+
     if not prior:
-        return (
-            dataset_context + "\n" + user_message + "\n\n"
-            "REMINDER — MANDATORY WORKFLOW:\n"
-            "1. Present the full plan in the format specified in your instructions "
-            "and ask 'Shall I proceed? (yes/no)' BEFORE calling any tool.\n"
-            "2. Do NOT call aggregate_credit_card, plot_trend, or any other tool "
-            "until the user replies 'yes'.\n"
-            "3. After 'yes': FIRST call aggregate_credit_card, THEN call the "
-            "visualization tool. Never skip the aggregation step."
-        )
+        return dataset_context + "\n" + user_message + _plan_reminder
 
     recent = prior[-6:]
     lines  = [dataset_context,
@@ -385,13 +384,7 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
             f"- Do NOT call final_answer() before Steps 1 and 2 are complete."
         )
     else:
-        lines.append(
-            "\nComplete the user's latest request using all context above. "
-            "Do not ask again for clarifications already answered in the conversation. "
-            "However, you MUST still follow the MANDATORY WORKFLOW: present the full "
-            "execution plan and ask 'Shall I proceed? (yes/no)' before calling any tool, "
-            "even if all information is already clear from context."
-        )
+        lines.append(_plan_reminder)
     return "\n".join(lines)
 
 
@@ -420,9 +413,15 @@ def run_agent(user_message: str, history: list, market: str, segment: str) -> tu
     history = history + [{"role": "user", "content": user_message}]
 
     charts_before = set(_collect_charts())
-    task = _build_task(user_message, history, market, segment)
+    task          = _build_task(user_message, history, market, segment)
+    is_confirm    = _is_confirmation(user_message)
 
-    if _is_confirmation(user_message):
+    # Planning phase  → max 2 steps (agent produces plan text only, no tools)
+    # Execution phase → max 8 steps (agent runs aggregate + plot + final_answer)
+    original_max_steps = agent.max_steps
+    agent.max_steps    = 8 if is_confirm else 2
+
+    if is_confirm:
         try:
             agent.memory.reset()
         except Exception:
@@ -430,13 +429,18 @@ def run_agent(user_message: str, history: list, market: str, segment: str) -> tu
 
     try:
         import concurrent.futures as _cf
+        _timeout = 180 if is_confirm else 60   # plan should be fast
         with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
             _future = _pool.submit(agent.run, task)
-            result  = _future.result(timeout=180)   # 3-minute hard cap
+            result  = _future.result(timeout=_timeout)
     except _cf.TimeoutError:
-        result = "⚠️ Request timed out after 3 minutes. Please click **Clear** and try again."
+        result = ("⚠️ Request timed out. Please click **Clear** and try again."
+                  if is_confirm else
+                  "⚠️ Could not generate a plan. Please rephrase your request.")
     except Exception as e:
         result = f"ERROR: {e}"
+    finally:
+        agent.max_steps = original_max_steps   # restore
 
     response   = str(result)
     new_charts = [c for c in _collect_charts() if c not in charts_before]
