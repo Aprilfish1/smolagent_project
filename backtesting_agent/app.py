@@ -455,55 +455,67 @@ def _show_summary(fig, avg_df, neg_df, ampe_df):
 # ── Agent runner ──────────────────────────────────────────────────────────────
 def run_agent(user_message: str, history: list, market: str, segment: str) -> tuple:
     """After first request: hide summary components, show gallery."""
-    if not user_message.strip():
-        return (history, "Enter a request above.",
-                gr.update(), *[gr.update()] * _SUMMARY_COMPONENTS)
+    import traceback, concurrent.futures as _cf
 
-    history = history + [{"role": "user", "content": user_message}]
-
-    charts_before = set(_collect_charts())
-    task          = _build_task(user_message, history, market, segment)
-    is_confirm    = _is_confirmation(user_message)
-
-    # Planning phase  → max 2 steps (agent produces plan text only, no tools)
-    # Execution phase → max 8 steps (agent runs aggregate + plot + final_answer)
-    original_max_steps = agent.max_steps
-    agent.max_steps    = 8 if is_confirm else 2
-
-    if is_confirm:
-        try:
-            agent.memory.reset()
-        except Exception:
-            pass
+    def _safe_return(history, status, response):
+        history = history + [{"role": "assistant", "content": response}]
+        return (history, status,
+                gr.update(value=_session_charts(), visible=True),
+                *_hide_summary())
 
     try:
-        import concurrent.futures as _cf
-        _timeout = 180 if is_confirm else 60   # plan should be fast
-        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-            _future = _pool.submit(agent.run, task)
-            result  = _future.result(timeout=_timeout)
-    except _cf.TimeoutError:
-        result = ("⚠️ Request timed out. Please click **Clear** and try again."
-                  if is_confirm else
-                  "⚠️ Could not generate a plan. Please rephrase your request.")
-    except Exception as e:
-        result = f"ERROR: {e}"
-    finally:
-        agent.max_steps = original_max_steps   # restore
+        if not user_message.strip():
+            return (history, "Enter a request above.",
+                    gr.update(), *[gr.update()] * _SUMMARY_COMPONENTS)
 
-    response   = str(result)
-    new_charts = [c for c in _collect_charts() if c not in charts_before]
-    if new_charts:
-        new_names  = ", ".join(os.path.basename(c) for c in new_charts)
-        response  += f"\n\n📊 New chart(s) generated: {new_names}"
+        history       = history + [{"role": "user", "content": user_message}]
+        charts_before = set(_collect_charts())
+        task          = _build_task(user_message, history, market, segment)
+        is_confirm    = _is_confirmation(user_message)
 
-    history = history + [{"role": "assistant", "content": response}]
-    status  = (f"✅ Done — {len(new_charts)} new chart(s) generated."
-               if new_charts else "✅ Done — no new charts.")
+        # Planning phase → max 2 steps (plan text only, no tools)
+        # Execution phase → max 8 steps (aggregate + plot + final_answer)
+        original_max_steps = agent.max_steps
+        agent.max_steps    = 8 if is_confirm else 2
 
-    return (history, status,
-            gr.update(value=_session_charts(), visible=True),  # gallery: update + show
-            *_hide_summary())                                   # hide summary components
+        if is_confirm:
+            try:
+                agent.memory.reset()
+            except Exception:
+                pass
+
+        try:
+            _timeout = 180 if is_confirm else 60
+            with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                _future = _pool.submit(agent.run, task)
+                result  = _future.result(timeout=_timeout)
+        except _cf.TimeoutError:
+            result = ("⚠️ Request timed out. Please click **Clear** and try again."
+                      if is_confirm else
+                      "⚠️ Could not generate a plan. Please rephrase your request.")
+        except Exception as e:
+            result = f"ERROR: {e}"
+        finally:
+            agent.max_steps = original_max_steps
+
+        response   = str(result)
+        new_charts = [c for c in _collect_charts() if c not in charts_before]
+        if new_charts:
+            new_names  = ", ".join(os.path.basename(c) for c in new_charts)
+            response  += f"\n\n📊 New chart(s) generated: {new_names}"
+
+        status = (f"✅ Done — {len(new_charts)} new chart(s) generated."
+                  if new_charts else "✅ Done — no new charts.")
+        return _safe_return(history, status, response)
+
+    except Exception:
+        err = traceback.format_exc()
+        print(f"[run_agent UNHANDLED]\n{err}")
+        return _safe_return(
+            history,
+            "❌ Unexpected error — see terminal for details.",
+            f"An unexpected error occurred:\n```\n{err}\n```",
+        )
 
 
 def clear_all(market: str, segment: str) -> tuple:
