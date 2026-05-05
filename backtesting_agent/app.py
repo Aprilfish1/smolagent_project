@@ -226,7 +226,7 @@ def _build_neg_pred_table(market: str, segment: str) -> pd.DataFrame:
     return neg.reset_index(drop=True)
 
 
-def _build_ampe_flag_table(market: str, segment: str, threshold: float = 5.0) -> pd.DataFrame:
+def _build_ampe_flag_table(market: str, segment: str, threshold: float = 10.0) -> pd.DataFrame:
     """Statement months where any target's AMPE exceeds the threshold (default 5%)."""
     df = _read_summary_csv(market, segment)
     if df is None:
@@ -484,7 +484,7 @@ with gr.Blocks(title="CCAR Backtesting Agent") as demo:
             )
 
             ampe_flag_table = gr.Dataframe(
-                label="⚠️ Statement Months with AMPE > 5%",
+                label="⚠️ Statement Months with AMPE > 10%",
                 visible=True, interactive=False, wrap=True,
             )
 
