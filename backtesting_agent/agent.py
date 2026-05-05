@@ -46,9 +46,13 @@ def _build_column_context(cfg: dict) -> str:
     lines = ["\nProject configuration (from config.yaml)\n" + "-" * 52]
 
     if datasets:
-        lines.append("Dataset file paths — use these when the user says 'the dataset', 'Round 1', etc.:")
-        for name, path in datasets.items():
-            lines.append(f"  {name}: {path}")
+        lines.append("Dataset file paths — nested by Market / Segment:")
+        for market, value in datasets.items():
+            if isinstance(value, dict):
+                for segment, path in value.items():
+                    lines.append(f"  {market} / {segment}: {path}")
+            else:
+                lines.append(f"  {market}: {value}")
 
     if targets:
         lines.append("\nTarget variables — map short names the user types to exact column names:")

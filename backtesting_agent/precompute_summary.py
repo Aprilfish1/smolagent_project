@@ -1,15 +1,20 @@
 # %% [markdown]
 # # CCAR Backtesting — Pre-compute Summary Metrics
 #
-# Run this script once (or whenever the dataset / filter changes) to generate
-# a small per-statement-month summary CSV used by the Gradio UI for fast
-# dashboard loading.
+# Run this script once (or whenever a dataset changes) to generate a small
+# per-statement-month summary CSV used by the Gradio UI for fast dashboard loading.
 #
 # Usage (from repo root):
 #     python backtesting_agent/precompute_summary.py
 #
-# Output:
-#     backtesting_agent/data_input/{dataset_name}_summary.csv
+# Config structure expected in config.yaml:
+#     datasets:
+#       <MarketName>:
+#         <SegmentName>: path/to/parquet
+#
+# Output (one CSV per Market+Segment pair):
+#     backtesting_agent/data_input/{Market}_{Segment}_summary.csv
+#   (spaces in Market/Segment names are replaced with underscores)
 #
 # CSV columns per statement month:
 #   statement_month, max_horizon,
@@ -40,26 +45,45 @@ horizon_col = "horizon"   # always present in parquet as a column
 perf_col    = time_cols.get("performance_month", "performance_month")
 row_filter  = cfg.get("default_row_filter", "")
 
+
+def _csv_key(market: str, segment: str) -> str:
+    """Return the filesystem-safe key used for the summary CSV filename."""
+    sanitize = lambda s: s.strip().replace(" ", "_")
+    return f"{sanitize(market)}_{sanitize(segment)}"
+
+
 print("=" * 60)
 print("CCAR Backtesting — Pre-compute Summary Metrics")
 print("=" * 60)
-print(f"Datasets   : {list(datasets.keys())}")
 print(f"Targets    : {list(targets.keys())}")
 print(f"Row filter : {row_filter or '(none)'}")
 print(f"Output dir : {OUTPUT_DIR}")
 print()
 
+# Enumerate all (market, segment, path) triples from nested config
+dataset_triples: list[tuple[str, str, str]] = []
+for market, segments in datasets.items():
+    if isinstance(segments, dict):
+        for segment, parquet_path in segments.items():
+            dataset_triples.append((market, segment, parquet_path))
+    else:
+        # Flat entry (legacy): treat market name as both market and segment
+        dataset_triples.append((market, market, segments))
+
+print(f"Datasets   : {[(m, s) for m, s, _ in dataset_triples]}")
+print()
+
 
 # %%
-def compute_summary(dataset_name: str, parquet_path: str) -> pd.DataFrame:
+def compute_summary(label: str, parquet_path: str) -> pd.DataFrame:
     """
     For each statement month compute:
-      - max_horizon          (detect completeness, 28 = full)
-      - {Target}_mpe         MPE in % using flow (sum) or stock (avg) logic
-      - {Target}_ampe        AMPE in %
+      - max_horizon             (detect completeness; 28 = full)
+      - {Target}_mpe            MPE in % using flow (sum) or stock (avg) logic
+      - {Target}_ampe           AMPE in %
       - {Target}_pred_negative  True if portfolio predicted value < 0 (stock only)
     """
-    print(f"Processing '{dataset_name}' ...")
+    print(f"Processing '{label}' → {parquet_path} ...")
 
     # Collect all needed columns up front
     all_act  = [v["actual"]    for v in targets.values()]
@@ -129,17 +153,19 @@ def compute_summary(dataset_name: str, parquet_path: str) -> pd.DataFrame:
 
 
 # %%
-for dataset_name, parquet_path in datasets.items():
+for market, segment, parquet_path in dataset_triples:
+    label = f"{market} / {segment}"
+    key   = _csv_key(market, segment)
     try:
-        df = compute_summary(dataset_name, parquet_path)
-        out_path = OUTPUT_DIR / f"{dataset_name}_summary.csv"
+        df       = compute_summary(label, parquet_path)
+        out_path = OUTPUT_DIR / f"{key}_summary.csv"
         df.to_csv(out_path, index=False)
         print(f"  Saved → {out_path}  ({len(df)} rows)")
         print(f"  Columns: {list(df.columns)}")
         print(df.head(3).to_string(index=False))
         print()
     except Exception as e:
-        print(f"  ERROR processing '{dataset_name}': {e}")
+        print(f"  ERROR processing '{label}': {e}")
         print()
 
 print("Done!")

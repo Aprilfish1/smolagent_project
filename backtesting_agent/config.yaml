@@ -8,12 +8,27 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Dataset file paths
-# The agent will use these by default when you say "the dataset" or "Round 1".
+# Dataset file paths — nested by Market → Segment
+#
+# Structure:
+#   datasets:
+#     <MarketName>:
+#       <SegmentName>: path/to/account_level.parquet
+#
+# The UI will show two dropdowns: one for Market, one for Segment.
+# Pre-computed summary CSVs are named:  {MarketName}_{SegmentName}_summary.csv
+#   (spaces in names are replaced with underscores)
 # ─────────────────────────────────────────────────────────────────────────────
 datasets:
-  round1: backtesting_agent/sample_data/ccar_round1.parquet
-  round2: backtesting_agent/sample_data/ccar_round2.parquet
+  CCAR:
+    Round1: backtesting_agent/sample_data/ccar_round1.parquet
+    Round2: backtesting_agent/sample_data/ccar_round2.parquet
+  # Add more markets and segments below.  Example:
+  # US:
+  #   Retail: path/to/us_retail_backtest.parquet
+  #   Premium: path/to/us_premium_backtest.parquet
+  # UK:
+  #   Retail: path/to/uk_retail_backtest.parquet
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Time dimension column names
