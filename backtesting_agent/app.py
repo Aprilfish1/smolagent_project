@@ -325,17 +325,34 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
     lines.append(f"\nUser's latest message: {user_message}")
 
     if _is_confirmation(user_message):
-        # ── Find the most recent plan in history ──────────────────────────────
+        # ── Find the most recent plan in history (flexible match) ─────────────
         plan_text = ""
         for m in reversed(prior):
-            if m["role"] == "assistant" and "Here is my plan" in m.get("content", ""):
-                plan_text = m["content"]
+            content = m.get("content", "")
+            if m["role"] == "assistant" and _re.search(
+                r"here\s+is\s+my\s+plan|my\s+plan\s+is|plan\s*:", content, _re.IGNORECASE
+            ):
+                plan_text = content
                 break
+
+        # If no plan found, ask agent to re-present it
+        if not plan_text:
+            return (
+                f"{dataset_context}\n"
+                f"The user said 'yes' but no plan was found in the conversation history.\n"
+                f"Please re-present the complete plan in the standard format and ask "
+                f"'Shall I proceed? (yes / no)' again. Do NOT call any tool yet."
+            )
 
         # ── Parse plan fields so we can inject concrete values ────────────────
         def _field(pattern, text, default=""):
             m = _re.search(pattern, text, _re.IGNORECASE)
-            return m.group(1).strip() if m else default
+            if not m:
+                return default
+            val = m.group(1).strip()
+            # Strip markdown bold (**text**) and trailing punctuation
+            val = _re.sub(r"\*+", "", val).strip(" .,:")
+            return val if val else default
 
         plan_dataset   = _field(r"Dataset\s*:\s*(.+)",    plan_text, parquet)
         plan_target    = _field(r"Target\s*:\s*(.+)",     plan_text)
