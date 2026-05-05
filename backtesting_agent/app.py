@@ -298,7 +298,16 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
 
     prior = history[:-1]
     if not prior:
-        return dataset_context + "\n" + user_message
+        return (
+            dataset_context + "\n" + user_message + "\n\n"
+            "REMINDER — MANDATORY WORKFLOW:\n"
+            "1. Present the full plan in the format specified in your instructions "
+            "and ask 'Shall I proceed? (yes/no)' BEFORE calling any tool.\n"
+            "2. Do NOT call aggregate_credit_card, plot_trend, or any other tool "
+            "until the user replies 'yes'.\n"
+            "3. After 'yes': FIRST call aggregate_credit_card, THEN call the "
+            "visualization tool. Never skip the aggregation step."
+        )
 
     recent = prior[-6:]
     lines  = [dataset_context,
