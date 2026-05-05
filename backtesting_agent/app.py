@@ -490,10 +490,10 @@ def run_agent(user_message: str, history: list, market: str, segment: str) -> tu
         task          = _build_task(user_message, history, market, segment)
         is_confirm    = _is_confirmation(user_message)
 
-        # Planning phase → max 4 steps (plan text only, no tools)
-        # Execution phase → max 8 steps (aggregate + plot + final_answer)
+        # Planning phase → max 8 steps (plan text only, no tools)
+        # Execution phase → max 20 steps (aggregate + plot + final_answer)
         original_max_steps = agent.max_steps
-        agent.max_steps    = 8 if is_confirm else 4
+        agent.max_steps    = 20 if is_confirm else 8
 
         if is_confirm:
             try:
@@ -502,7 +502,7 @@ def run_agent(user_message: str, history: list, market: str, segment: str) -> tu
                 pass
 
         try:
-            _timeout = 180 if is_confirm else 60
+            _timeout = 600 if is_confirm else 120
             with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
                 _future = _pool.submit(agent.run, task)
                 result  = _future.result(timeout=_timeout)
