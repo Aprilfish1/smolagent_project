@@ -49,7 +49,7 @@ agent = build_agent()
 def _load_datasets() -> dict[str, dict[str, str]]:
     """Return nested {market: {segment: parquet_path}} from config.yaml."""
     cfg      = _load_config()
-    raw      = cfg.get("datasets", {})
+    raw      = cfg.get("datasets") or {}
     nested: dict[str, dict[str, str]] = {}
     for market, value in raw.items():
         if isinstance(value, dict):
@@ -252,8 +252,18 @@ def _build_ampe_flag_table(market: str, segment: str, threshold: float = 5.0) ->
 
 
 # ── Load all summary components at once ──────────────────────────────────────
-def _load_summary(market: str, segment: str) -> tuple:
+def _load_summary(market: str | None, segment: str | None) -> tuple:
     """Return (fig, avg_mpe_df, neg_pred_df, ampe_flag_df, chatbot_history)."""
+    if not market or not segment:
+        msg = (
+            "No datasets configured yet.\n\n"
+            "Add your Market / Segment entries to `backtesting_agent/config.yaml`, "
+            "then run `python backtesting_agent/precompute_summary.py` and restart the app."
+        )
+        empty = pd.DataFrame()
+        history = [{"role": "assistant", "content": msg}]
+        return None, empty, empty, empty, history
+
     fig     = generate_summary_charts(market, segment)
     avg_df  = _build_avg_mpe_table(market, segment)
     neg_df  = _build_neg_pred_table(market, segment)

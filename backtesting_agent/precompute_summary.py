@@ -37,7 +37,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 with open(CONFIG_PATH) as f:
     cfg = yaml.safe_load(f)
 
-datasets    = cfg.get("datasets", {})
+datasets    = cfg.get("datasets") or {}
 targets     = cfg.get("target_variables", {})
 time_cols   = cfg.get("time_columns", {})
 stmt_col    = time_cols.get("statement_month", "statement_month")

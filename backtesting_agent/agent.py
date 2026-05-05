@@ -41,7 +41,7 @@ def _build_column_context(cfg: dict) -> str:
     targets = cfg.get("target_variables", {})
     groups  = cfg.get("default_group_by_columns", [])
     output_dir = str(Path(__file__).parent.parent / "backtesting_output")
-    datasets = cfg.get("datasets", {})
+    datasets = cfg.get("datasets") or {}
 
     lines = ["\nProject configuration (from config.yaml)\n" + "-" * 52]
 
