@@ -20,12 +20,14 @@
 #   (spaces in names are replaced with underscores)
 # ─────────────────────────────────────────────────────────────────────────────
 datasets:
-  # Add your markets and segments here.  Example structure:
-  # US:
-  #   Retail: path/to/us_retail_backtest.parquet
-  #   Premium: path/to/us_premium_backtest.parquet
-  # UK:
-  #   Retail: path/to/uk_retail_backtest.parquet
+  US:
+    Retail:  backtesting_agent/sample_data/us_retail.parquet
+    Premium: backtesting_agent/sample_data/us_premium.parquet
+  UK:
+    Retail:  backtesting_agent/sample_data/uk_retail.parquet
+  # Add more markets and segments below:
+  # CA:
+  #   Retail: path/to/ca_retail_backtest.parquet
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Time dimension column names
