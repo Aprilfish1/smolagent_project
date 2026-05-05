@@ -335,9 +335,9 @@ def build_agent(extra_instructions: str = "", **agent_kwargs) -> CodeAgent:
         model=model,
         additional_authorized_imports=AUTHORIZED_IMPORTS,
         instructions=instructions,
-        max_steps=agent_kwargs.pop("max_steps", 15),
+        max_steps=agent_kwargs.pop("max_steps", 8),
         verbosity_level=agent_kwargs.pop("verbosity_level", 1),
-        stream_outputs=agent_kwargs.pop("stream_outputs", True),
+        stream_outputs=agent_kwargs.pop("stream_outputs", False),
         **agent_kwargs,
     )
     return agent

@@ -429,7 +429,12 @@ def run_agent(user_message: str, history: list, market: str, segment: str) -> tu
             pass
 
     try:
-        result = agent.run(task)
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _future = _pool.submit(agent.run, task)
+            result  = _future.result(timeout=180)   # 3-minute hard cap
+    except _cf.TimeoutError:
+        result = "⚠️ Request timed out after 3 minutes. Please click **Clear** and try again."
     except Exception as e:
         result = f"ERROR: {e}"
 
