@@ -326,6 +326,21 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
             )
         col_block = "\n".join(col_info) if col_info else "  (see config.yaml)"
 
+        # Derive y_columns from the confirmed metric in the plan
+        import re as _re
+        _metric_match = _re.search(r"Metric\s*:\s*(.+)", plan_text, _re.IGNORECASE)
+        _metric_val   = _metric_match.group(1).strip().lower() if _metric_match else ""
+        if "predicted only" in _metric_val:
+            y_columns = "plot_predicted"
+        elif "actual only" in _metric_val:
+            y_columns = "plot_actual"
+        elif "ampe" in _metric_val:
+            y_columns = "AMPE"
+        elif "mpe" in _metric_val:
+            y_columns = "MPE"
+        else:
+            y_columns = "plot_actual,plot_predicted"
+
         return (
             f"{dataset_context}\n"
             f"The user confirmed the plan below. Execute it NOW using the provided tools.\n\n"
@@ -348,7 +363,7 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
             f"Step 2 (code block 2):\n"
             f"  chart_path = plot_trend(\n"
             f"      x_column=<dimension column from plan>,\n"
-            f"      y_columns='plot_actual,plot_predicted',\n"
+            f"      y_columns='{y_columns}',\n"
             f"      dataset_name='agg_result',\n"
             f"      title=<descriptive title>,\n"
             f"      y_unit='millions',\n"
