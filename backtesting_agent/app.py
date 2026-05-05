@@ -255,30 +255,14 @@ def _build_ampe_flag_table(market: str, segment: str, threshold: float = 5.0) ->
 def _load_summary(market: str | None, segment: str | None) -> tuple:
     """Return (fig, avg_mpe_df, neg_pred_df, ampe_flag_df, chatbot_history)."""
     if not market or not segment:
-        msg = (
-            "No datasets configured yet.\n\n"
-            "Add your Market / Segment entries to `backtesting_agent/config.yaml`, "
-            "then run `python backtesting_agent/precompute_summary.py` and restart the app."
-        )
         empty = pd.DataFrame()
-        history = [{"role": "assistant", "content": msg}]
-        return None, empty, empty, empty, history
+        return None, empty, empty, empty, []
 
     fig     = generate_summary_charts(market, segment)
     avg_df  = _build_avg_mpe_table(market, segment)
     neg_df  = _build_neg_pred_table(market, segment)
     ampe_df = _build_ampe_flag_table(market, segment)
-
-    parquet = _get_parquet_path(market, segment)
-    path_line = f"`{parquet}`" if parquet else "_(path not configured)_"
-    msg = (
-        f"**Dataset: {market} / {segment}** summary loaded.  "
-        f"Parquet: {path_line}  \n"
-        f"See the charts and tables on the left. "
-        f"Send a request below to start your analysis."
-    )
-    history = [{"role": "assistant", "content": msg}]
-    return fig, avg_df, neg_df, ampe_df, history
+    return fig, avg_df, neg_df, ampe_df, []
 
 
 # ── Chart gallery helpers ─────────────────────────────────────────────────────
