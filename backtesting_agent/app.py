@@ -287,6 +287,25 @@ def _is_confirmation(msg: str) -> bool:
     return msg.strip().lower().rstrip(".!") in _CONFIRM_WORDS
 
 
+def _extract_text(content) -> str:
+    """Extract plain text from a message content field.
+
+    Gradio may return content as a plain string or as a list of content blocks
+    (multimodal format). This helper always returns a plain string.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                parts.append(item.get("text", item.get("value", "")))
+        return " ".join(parts)
+    return str(content) if content is not None else ""
+
+
 def _build_task(user_message: str, history: list, market: str, segment: str) -> str:
     """Build the full task string sent to the agent, including dataset context."""
     parquet = _get_parquet_path(market, segment) or "(unknown path)"
@@ -301,14 +320,12 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
     # ── Plan reminder (non-confirmation messages) ─────────────────────────────
     _plan_reminder = (
         "\n\nMANDATORY — YOU MUST DO EXACTLY ONE OF THESE RIGHT NOW:\n"
-        "A) If ANY required information is still missing or ambiguous "
-        "(target variable, level, dimension, etc.): call final_answer() with ONE "
-        "combined question asking for all missing details.\n"
-        "B) If you have all the information needed: call final_answer() with the "
-        "complete plan in the format specified in your instructions and ask "
-        "'Shall I proceed? (yes / no)' at the end.\n"
-        "In either case, do NOT call aggregate_credit_card, plot_trend, "
-        "inspect_parquet, or any other tool. ONLY call final_answer()."
+        "A) If ANY required detail is missing or ambiguous, ask ONE combined question.\n"
+        "   Required details: target variable, dimension, level (portfolio OR account — "
+        "this MUST be stated explicitly by the user; never assume a default).\n"
+        "B) Only if you have ALL required details: call final_answer() with the complete "
+        "plan in the standard format and ask 'Shall I proceed? (yes / no)' at the end.\n"
+        "In BOTH cases, do NOT call any tool. ONLY call final_answer()."
     )
 
     prior = history[:-1]
@@ -321,14 +338,14 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
               "Conversation so far (use this as full context for the request below):"]
     for msg in recent:
         role = "User" if msg["role"] == "user" else "Assistant"
-        lines.append(f"  {role}: {msg['content']}")
+        lines.append(f"  {role}: {_extract_text(msg.get('content', ''))}")
     lines.append(f"\nUser's latest message: {user_message}")
 
     if _is_confirmation(user_message):
         # ── Find the most recent plan in history (flexible match) ─────────────
         plan_text = ""
         for m in reversed(prior):
-            content = m.get("content", "")
+            content = _extract_text(m.get("content", ""))
             if m["role"] == "assistant" and _re.search(
                 r"here\s+is\s+my\s+plan|my\s+plan\s+is|plan\s*:", content, _re.IGNORECASE
             ):
@@ -473,10 +490,10 @@ def run_agent(user_message: str, history: list, market: str, segment: str) -> tu
         task          = _build_task(user_message, history, market, segment)
         is_confirm    = _is_confirmation(user_message)
 
-        # Planning phase → max 2 steps (plan text only, no tools)
+        # Planning phase → max 4 steps (plan text only, no tools)
         # Execution phase → max 8 steps (aggregate + plot + final_answer)
         original_max_steps = agent.max_steps
-        agent.max_steps    = 8 if is_confirm else 2
+        agent.max_steps    = 8 if is_confirm else 4
 
         if is_confirm:
             try:
@@ -498,7 +515,15 @@ def run_agent(user_message: str, history: list, market: str, segment: str) -> tu
         finally:
             agent.max_steps = original_max_steps
 
-        response   = str(result)
+        response = str(result)
+
+        # If the agent returned a raw final_answer("...") call as text, unwrap it
+        import re as _re2
+        _fa = _re2.search(r'''final_answer\s*\(\s*["']{1,3}(.*?)["']{1,3}\s*\)''',
+                          response, _re2.DOTALL)
+        if _fa:
+            response = _fa.group(1).replace("\\n", "\n").replace("\\'", "'").replace('\\"', '"')
+
         new_charts = [c for c in _collect_charts() if c not in charts_before]
         if new_charts:
             new_names  = ", ".join(os.path.basename(c) for c in new_charts)
