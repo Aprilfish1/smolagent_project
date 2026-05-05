@@ -120,7 +120,8 @@ def generate_summary_charts(market: str, segment: str):
         return fig
 
     cfg     = _load_config()
-    targets = cfg.get("target_variables", {})
+    targets = {name: cols for name, cols in cfg.get("target_variables", {}).items()
+               if cols.get("metric_type") == "stock"}
     if not targets:
         return None
 
