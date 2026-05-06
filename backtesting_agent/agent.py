@@ -86,6 +86,7 @@ from backtesting_agent.tools import (
     list_loaded_datasets,
     # aggregation — single tool covers all CC dimensions with correct domain logic
     aggregate_credit_card,
+    aggregate_distribution,
     # visualization
     generate_chart,
     plot_trend,
@@ -99,6 +100,7 @@ TOOLS = [
     list_loaded_datasets,
     # aggregation — use for ALL Payment / PurchaseVolume / EOS analysis
     aggregate_credit_card,
+    aggregate_distribution,
     # visualization
     generate_chart,
     plot_trend,
@@ -175,6 +177,22 @@ Metrics tool — calculate_backtesting_metrics
   • level: "account" (row-by-row avg), "portfolio" (totals), or "both"
   • n_accounts_column: set to "n_accounts" when using aggregated data to get per-account $
   • Error = predicted - actual (positive MPE = over-prediction, negative = under-prediction)
+
+Box plot / distribution — aggregate_distribution
+------------------------------------------------
+Use this (NOT aggregate_credit_card) when the user asks for a box plot,
+distribution, spread, or quartiles of a target variable or metric.
+
+aggregate_distribution keeps one row per account per group so that
+generate_chart(chart_type='box') can draw a proper box with median,
+IQR, and whiskers across accounts.
+
+Workflow for box plots:
+  Step 1: aggregate_distribution(file_path, actual_column, predicted_column,
+              metric_type, dimension, dataset_name, row_filter)
+  Step 2: generate_chart(chart_type='box', x_column=<dimension_col>,
+              y_column='MPE',   # or AMPE / actual_column / predicted_column
+              dataset_name=<same name>, title=..., y_unit='percent')
 
 Visualization tools
 -------------------

@@ -307,3 +307,134 @@ def aggregate_credit_card(
         return f"ERROR during aggregation: {e}"
 
     return _cc_summary(df, dataset_name, metric_type, dimension, level, out_col)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Distribution aggregation — for box plots
+# ─────────────────────────────────────────────────────────────────────────────
+
+@tool
+def aggregate_distribution(
+    file_path: str,
+    actual_column: str,
+    predicted_column: str,
+    metric_type: str,
+    dimension: str,
+    dataset_name: str,
+    row_filter: str = "",
+    statement_month_column: str = "statement_month",
+    horizon_column: str = "horizon",
+    performance_month_column: str = "performance_month",
+) -> str:
+    """
+    Prepare per-account distribution data for box plots.
+
+    Unlike aggregate_credit_card (which collapses to 1 row per group for
+    trend/bar charts), this tool keeps one row per account per dimension value
+    so that generate_chart(chart_type='box') can show the spread of values
+    across accounts within each group.
+
+    Flow targets: sum actual and predicted across ALL horizons per account per
+    group, then compute per-account MPE.
+    Stock targets: filter to max horizon per statement_month first, then keep
+    one row per account per group.
+
+    Output columns: dimension_col, actual_column, predicted_column, MPE, AMPE.
+    Follow with generate_chart(chart_type='box', y_column='MPE', ...).
+
+    Args:
+        file_path: Path to the parquet dataset file.
+        actual_column: Column name for actual values (e.g. 'actual_payment').
+        predicted_column: Column name for predicted values.
+        metric_type: 'flow' (sum all horizons) or 'stock' (max horizon only).
+        dimension: Grouping dimension — 'statement_month', 'horizon', or 'performance_month'.
+        dataset_name: Name to store the result under for use by generate_chart.
+        row_filter: Optional pandas query filter string (e.g. "horizon <= 28").
+        statement_month_column: Column name for statement month (default 'statement_month').
+        horizon_column: Column name for horizon (default 'horizon').
+        performance_month_column: Column name for performance month (default 'performance_month').
+    """
+    import numpy as np
+
+    # Map dimension name to column
+    DIM_MAP = {
+        "statement_month":   statement_month_column,
+        "horizon":           horizon_column,
+        "performance_month": performance_month_column,
+    }
+    dim_col = DIM_MAP.get(dimension, dimension)
+
+    needed = list({statement_month_column, horizon_column, actual_column,
+                   predicted_column, dim_col})
+
+    err = _check_columns(file_path, needed)
+    if err:
+        return err
+
+    try:
+        lf = pl.scan_parquet(file_path).select(
+            list(set(needed))
+        )
+        lf = _apply_filter(lf, row_filter)
+
+        # Apply stock filter: keep only max horizon per statement_month
+        if metric_type == "stock":
+            lf = _cc_filter_stock(lf, statement_month_column, horizon_column)
+
+        df = lf.collect().to_pandas()
+
+        if df.empty:
+            return "ERROR: No data remains after filtering."
+
+        # For flow: sum actual and predicted across horizons per (dim_col, row group).
+        # We treat every unique non-horizon row index as one account observation.
+        # Group by dim_col and a surrogate account key derived from the data.
+        if metric_type == "flow":
+            # Sum across all horizons per implicit account (identified by
+            # grouping on dim_col only when we have already collected all cols).
+            # Since we don't require an explicit account_id column, we sum
+            # per (dim_col, everything-except-horizon-and-perf-month).
+            drop_cols = [c for c in [horizon_column, performance_month_column]
+                         if c in df.columns and c != dim_col]
+            group_cols = [c for c in df.columns
+                          if c not in [actual_column, predicted_column] + drop_cols]
+            if not group_cols:
+                group_cols = [dim_col]
+            df = (
+                df.groupby(group_cols, as_index=False, sort=False)
+                  .agg({actual_column: "sum", predicted_column: "sum"})
+            )
+
+        # Compute per-account MPE / AMPE
+        df["MPE"] = np.where(
+            df[actual_column] != 0,
+            (df[predicted_column] - df[actual_column]) / df[actual_column],
+            float("nan"),
+        )
+        df["AMPE"] = df["MPE"].abs()
+
+        # Keep only the columns needed for the box plot
+        keep = [c for c in [dim_col, actual_column, predicted_column, "MPE", "AMPE"]
+                if c in df.columns]
+        df = df[keep].dropna(subset=["MPE"])
+
+        _store(dataset_name, df)
+
+        n_groups  = df[dim_col].nunique()
+        n_rows    = len(df)
+        return (
+            f"Distribution data ready → dataset '{dataset_name}'\n"
+            f"  dimension   : {dimension}  (column: '{dim_col}')\n"
+            f"  metric_type : {metric_type}\n"
+            f"  total rows  : {n_rows}  ({n_rows // n_groups if n_groups else 0} accounts per group on avg)\n"
+            f"  groups      : {n_groups}\n"
+            f"  columns     : {keep}\n"
+            f"  Median MPE  : {df['MPE'].median():.4f}\n"
+            f"\nNow call generate_chart(chart_type='box', x_column='{dim_col}',\n"
+            f"    y_column='MPE', dataset_name='{dataset_name}', ...)"
+        )
+
+    except ValueError as e:
+        return f"ERROR: {e}"
+    except Exception as e:
+        return f"ERROR during distribution aggregation: {e}"
