@@ -374,7 +374,8 @@ def _build_task(user_message: str, history: list, market: str, segment: str) -> 
         plan_dataset   = _field(r"Dataset\s*:\s*(.+)",    plan_text, parquet)
         plan_target    = _field(r"Target\s*:\s*(.+)",     plan_text)
         plan_metric    = _field(r"Metric\s*:\s*(.+)",     plan_text).lower()
-        plan_dimension = _field(r"Dimension\s*:\s*(.+)",  plan_text, "statement_month").lower().strip()
+        _dim_raw       = _field(r"Dimension\s*:\s*(.+)",  plan_text, "statement_month").lower().strip()
+        plan_dimension = _dim_raw.split()[0] if _dim_raw else "statement_month"  # keyword only
         plan_level     = _field(r"Level\s*:\s*(.+)",      plan_text, "portfolio").lower().strip()
         plan_filter    = _field(r"Filter\s*:\s*(.+)",     plan_text)
 
@@ -567,77 +568,123 @@ with gr.Blocks(title="CCAR Backtesting Agent") as demo:
 
     gr.Markdown("# CCAR Backtesting Analysis Agent")
 
-    # ── Dataset selector (two dropdowns) ─────────────────────────────────────
-    with gr.Row():
-        market_dropdown = gr.Dropdown(
-            choices=_markets,
-            value=_default_market,
-            label="Market",
-            scale=0,
-            min_width=180,
-        )
-        segment_dropdown = gr.Dropdown(
-            choices=_default_segs,
-            value=_default_segment,
-            label="Segment",
-            scale=0,
-            min_width=180,
-        )
+    with gr.Row(equal_height=False):
 
-    # ── Main layout ───────────────────────────────────────────────────────────
-    with gr.Row():
+        # ── Left sidebar — visual only, no page switching ─────────────────────
+        with gr.Column(scale=1, min_width=160):
+            gr.HTML("""
+<div style="
+    font-family: inherit;
+    padding: 8px 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+">
+  <div style="font-weight:700; font-size:0.8em; text-transform:uppercase;
+              letter-spacing:0.08em; color:#6b7280; padding:4px 10px 8px;">
+    Navigation
+  </div>
+  <div style="background:rgba(99,102,241,0.12); border-left:3px solid #6366f1;
+              border-radius:6px; padding:7px 12px; font-size:0.88em; font-weight:600;
+              color:#4338ca; cursor:default;">
+    📊 CCAR Backtesting Agent
+  </div>
+  <div style="border-radius:6px; padding:7px 12px; font-size:0.88em;
+              color:#374151; cursor:default;">
+    📋 Model Inventory
+  </div>
+  <div style="border-radius:6px; padding:7px 12px; font-size:0.88em;
+              color:#374151; cursor:default;">
+    📈 Risk Dashboard
+  </div>
+  <div style="border-radius:6px; padding:7px 12px; font-size:0.88em;
+              color:#374151; cursor:default;">
+    📄 Regulatory Reports
+  </div>
+  <div style="border-radius:6px; padding:7px 12px; font-size:0.88em;
+              color:#374151; cursor:default;">
+    🔍 Data Quality
+  </div>
+  <div style="border-radius:6px; padding:7px 12px; font-size:0.88em;
+              color:#374151; cursor:default;">
+    ⚙️ Settings
+  </div>
+</div>
+""")
 
-        # Left: summary dashboard (on load) / agent gallery (after first request)
-        with gr.Column(scale=3):
+        # ── Original CCAR layout — unchanged ─────────────────────────────────
+        with gr.Column(scale=9):
 
-            summary_plot = gr.Plot(label="MPE by Statement Month", visible=True)
-
-            avg_mpe_table = gr.Dataframe(
-                label="Average MPE Summary (all statement months)",
-                visible=True, interactive=False, wrap=True,
-            )
-
-            neg_pred_table = gr.Dataframe(
-                label="⚠️ Statement Months with Negative Predicted Values",
-                visible=True, interactive=False, wrap=True,
-            )
-
-            ampe_flag_table = gr.Dataframe(
-                label="⚠️ Statement Months with AMPE > 10%",
-                visible=True, interactive=False, wrap=True,
-            )
-
-            gallery = gr.Gallery(
-                label="Generated Charts (newest first)",
-                columns=2, height=560, object_fit="contain",
-                show_label=True, visible=False,
-            )
-            refresh_btn = gr.Button("🔄 Refresh Gallery", size="sm", visible=False)
-
-        # Right: chatbox
-        with gr.Column(scale=2):
-            chatbot = gr.Chatbot(label="Conversation", height=520)
+            # Dataset selector (two dropdowns)
             with gr.Row():
-                msg_box = gr.Textbox(
-                    placeholder="e.g. Show me Payment MPE by statement month at portfolio level…",
-                    label="Your request", scale=5, lines=2, autofocus=True)
-                with gr.Column(scale=1, min_width=120):
-                    submit_btn = gr.Button("▶ Run", variant="primary")
-                    clear_btn  = gr.Button("🗑 Clear")
-            status_box = gr.Textbox(label="Status", interactive=False, lines=1)
+                market_dropdown = gr.Dropdown(
+                    choices=_markets,
+                    value=_default_market,
+                    label="Market",
+                    scale=0,
+                    min_width=180,
+                )
+                segment_dropdown = gr.Dropdown(
+                    choices=_default_segs,
+                    value=_default_segment,
+                    label="Segment",
+                    scale=0,
+                    min_width=180,
+                )
 
-    with gr.Accordion("📁 Dataset paths & file info", open=False):
-        # Build a markdown table from config
-        _table_rows = []
-        for _mkt, _segs in _DATASETS.items():
-            for _seg, _path in _segs.items():
-                _table_rows.append(f"| {_mkt} | {_seg} | `{_path}` |")
-        _table_md = (
-            "| Market | Segment | Parquet path |\n"
-            "|---|---|---|\n"
-            + "\n".join(_table_rows)
-        )
-        gr.Markdown(f"""
+            # Main layout
+            with gr.Row():
+
+                # Left: summary dashboard (on load) / gallery (after request)
+                with gr.Column(scale=3):
+
+                    summary_plot = gr.Plot(label="MPE by Statement Month", visible=True)
+
+                    avg_mpe_table = gr.Dataframe(
+                        label="Average MPE Summary (all statement months)",
+                        visible=True, interactive=False, wrap=True,
+                    )
+
+                    neg_pred_table = gr.Dataframe(
+                        label="⚠️ Statement Months with Negative Predicted Values",
+                        visible=True, interactive=False, wrap=True,
+                    )
+
+                    ampe_flag_table = gr.Dataframe(
+                        label="⚠️ Statement Months with AMPE > 10%",
+                        visible=True, interactive=False, wrap=True,
+                    )
+
+                    gallery = gr.Gallery(
+                        label="Generated Charts (newest first)",
+                        columns=2, height=560, object_fit="contain",
+                        show_label=True, visible=False,
+                    )
+                    refresh_btn = gr.Button("🔄 Refresh Gallery", size="sm", visible=False)
+
+                # Right: chatbox
+                with gr.Column(scale=2):
+                    chatbot = gr.Chatbot(label="Conversation", height=520)
+                    with gr.Row():
+                        msg_box = gr.Textbox(
+                            placeholder="e.g. Show me Payment MPE by statement month at portfolio level…",
+                            label="Your request", scale=5, lines=2, autofocus=True)
+                        with gr.Column(scale=1, min_width=120):
+                            submit_btn = gr.Button("▶ Run", variant="primary")
+                            clear_btn  = gr.Button("🗑 Clear")
+                    status_box = gr.Textbox(label="Status", interactive=False, lines=1)
+
+            with gr.Accordion("📁 Dataset paths & file info", open=False):
+                _table_rows = []
+                for _mkt, _segs in _DATASETS.items():
+                    for _seg, _path in _segs.items():
+                        _table_rows.append(f"| {_mkt} | {_seg} | `{_path}` |")
+                _table_md = (
+                    "| Market | Segment | Parquet path |\n"
+                    "|---|---|---|\n"
+                    + "\n".join(_table_rows)
+                )
+                gr.Markdown(f"""
 {_table_md}
 
 Output charts saved to: `{os.path.abspath(OUTPUT_DIR)}`
@@ -645,35 +692,32 @@ Output charts saved to: `{os.path.abspath(OUTPUT_DIR)}`
 Pre-computed summary CSVs: `data_input/{{Market}}_{{Segment}}_summary.csv`
 """)
 
-    # ── Shared output list ────────────────────────────────────────────────────
-    _SUMMARY_OUTPUTS = [summary_plot, avg_mpe_table, neg_pred_table, ampe_flag_table]
-    _RUN_OUTPUTS     = [chatbot, status_box, gallery, *_SUMMARY_OUTPUTS]
-
-    # ── Events ────────────────────────────────────────────────────────────────
+    # ── CCAR page events ──────────────────────────────────────────────────────
 
     def on_market_change(market):
-        """Update segment dropdown when market changes, then load summary."""
         segs    = _get_segments(market)
         seg     = segs[0] if segs else None
         fig, avg_df, neg_df, ampe_df, history = _load_summary(market, seg) if seg else (None, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [])
         return (
-            gr.update(choices=segs, value=seg),   # segment dropdown
+            gr.update(choices=segs, value=seg),
             *_show_summary(fig, avg_df, neg_df, ampe_df),
-            gr.update(value=[], visible=False),    # gallery
-            gr.update(visible=False),              # refresh_btn
-            history,                               # chatbot
+            gr.update(value=[], visible=False),
+            gr.update(visible=False),
+            history,
         )
 
     def on_segment_change(market, segment):
-        """Reload summary when segment changes."""
         fig, avg_df, neg_df, ampe_df, history = _load_summary(market, segment)
         return (
             *_show_summary(fig, avg_df, neg_df, ampe_df),
-            gr.update(value=[], visible=False),    # gallery
-            gr.update(visible=False),              # refresh_btn
-            history,                               # chatbot
+            gr.update(value=[], visible=False),
+            gr.update(visible=False),
+            history,
         )
 
+    # ── Shared output lists ───────────────────────────────────────────────────
+    _SUMMARY_OUTPUTS = [summary_plot, avg_mpe_table, neg_pred_table, ampe_flag_table]
+    _RUN_OUTPUTS     = [chatbot, status_box, gallery, *_SUMMARY_OUTPUTS]
     _SELECTOR_OUTPUTS = [*_SUMMARY_OUTPUTS, gallery, refresh_btn, chatbot]
 
     market_dropdown.change(

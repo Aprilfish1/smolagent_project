@@ -172,6 +172,24 @@ def generate_chart(
 
     try:
         if chart_type == "bar":
+            # Sort x_column by numeric left bound when values look like bin intervals
+            # e.g. "(-inf, 610.0]", "(610.0, 650.0]" → sorted low to high
+            import re as _re
+            def _bin_left(val):
+                s = str(val).lstrip("([")
+                m = _re.search(r"-?[\d.]+", s)
+                return float(m.group()) if m else float("inf")
+
+            unique_x = df[x_column].dropna().unique()
+            looks_like_bins = any(
+                _re.search(r"^\s*[\(\[]-?(inf|\d)", str(v)) for v in unique_x
+            )
+            if looks_like_bins:
+                ordered_cats = sorted(unique_x, key=_bin_left)
+                df = df.copy()
+                df[x_column] = pd.Categorical(df[x_column], categories=ordered_cats, ordered=True)
+                df = df.sort_values(x_column)
+
             if multi_y:
                 # Grouped side-by-side bars: melt multiple y columns into long form,
                 # then rename the series values to display labels before plotting.

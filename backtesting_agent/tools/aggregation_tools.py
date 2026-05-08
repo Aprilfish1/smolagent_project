@@ -233,6 +233,28 @@ def aggregate_credit_card(
         lf = pl.scan_parquet(file_path).select(list(needed))
         lf = _apply_filter(lf, row_filter)
 
+        # ── Check for empty data right after filtering ────────────────────────
+        df_check = lf.collect()
+        if df_check.is_empty():
+            schema_dates = None
+            try:
+                full = pl.scan_parquet(file_path)
+                if statement_month_column in full.collect_schema().names():
+                    dates = (full.select(pl.col(statement_month_column).unique().sort())
+                               .collect()[statement_month_column].to_list())
+                    schema_dates = f"Available {statement_month_column} values (sample): {dates[:5]} … {dates[-5:]}"
+            except Exception:
+                pass
+            msg = (
+                f"ERROR: No rows remain after applying the row_filter.\n"
+                f"  row_filter used: '{row_filter}'\n"
+            )
+            if schema_dates:
+                msg += f"  {schema_dates}\n"
+            msg += "  Check that the filter matches actual values in the dataset."
+            return msg
+        lf = df_check.lazy()
+
         # EOS pre-filter: keep max-horizon row per statement_month
         if metric_type == "stock":
             lf = _cc_filter_stock(lf, statement_month_column, horizon_column)
@@ -265,23 +287,41 @@ def aggregate_credit_card(
         elif dimension == "feature_bins":
             fc = feature_column.strip()
             df_collected = lf.collect().to_pandas()
+
+            if df_collected.empty:
+                return (
+                    f"ERROR: No rows remain after filtering — cannot create bins for '{fc}'.\n"
+                    f"  row_filter used: '{row_filter}'"
+                )
+
+            non_null = df_collected[fc].dropna()
+            if non_null.empty:
+                return f"ERROR: Column '{fc}' is entirely null — cannot create bins."
+
             thresholds_str = bin_thresholds.strip()
-            if thresholds_str:
-                # Custom thresholds: parse comma-separated numbers and add ±inf edges
-                import math
-                cuts = sorted(float(v.strip()) for v in thresholds_str.split(",") if v.strip())
-                bins = [-math.inf] + cuts + [math.inf]
-                df_collected["_group"] = pd.cut(
-                    df_collected[fc], bins=bins, duplicates="drop"
-                ).astype(str)
-            elif bin_method == "quantile":
-                df_collected["_group"] = pd.qcut(
-                    df_collected[fc], q=n_bins, duplicates="drop"
-                ).astype(str)
-            else:
-                df_collected["_group"] = pd.cut(
-                    df_collected[fc], bins=n_bins, duplicates="drop"
-                ).astype(str)
+            try:
+                if thresholds_str:
+                    import math
+                    cuts = sorted(float(v.strip()) for v in thresholds_str.split(",") if v.strip())
+                    bins = [-math.inf] + cuts + [math.inf]
+                    df_collected["_group"] = pd.cut(
+                        df_collected[fc], bins=bins, duplicates="drop", precision=2
+                    ).astype(str)
+                elif bin_method == "quantile":
+                    df_collected["_group"] = pd.qcut(
+                        df_collected[fc], q=n_bins, duplicates="drop", precision=2
+                    ).astype(str)
+                else:
+                    df_collected["_group"] = pd.cut(
+                        df_collected[fc], bins=n_bins, duplicates="drop", precision=2
+                    ).astype(str)
+            except ValueError as bin_err:
+                return (
+                    f"ERROR: Binning failed for column '{fc}': {bin_err}\n"
+                    f"  Rows available: {len(df_collected)}, unique values: {non_null.nunique()}\n"
+                    f"  Try reducing n_bins (currently {n_bins}) or use bin_thresholds."
+                )
+
             lf = pl.from_pandas(df_collected).lazy()
             group_col, out_col = "_group", f"{fc}_bin"
 
@@ -297,6 +337,12 @@ def aggregate_credit_card(
             .collect()
         )
 
+        if agg_df.is_empty():
+            return (
+                f"ERROR: Aggregation produced zero groups for dimension='{dimension}'.\n"
+                f"  This can happen if the group-by column is entirely null after filtering."
+            )
+
         df = agg_df.to_pandas().rename(columns={group_col: out_col})
         df = _cc_compute_metrics(df, "total_actual", "total_predicted", level)
         _store(dataset_name, df)
@@ -304,7 +350,7 @@ def aggregate_credit_card(
     except ValueError as e:
         return f"ERROR: {e}"
     except Exception as e:
-        return f"ERROR during aggregation: {e}"
+        return f"ERROR during aggregation: {type(e).__name__}: {e}"
 
     return _cc_summary(df, dataset_name, metric_type, dimension, level, out_col)
 
@@ -376,6 +422,16 @@ def aggregate_distribution(
             list(set(needed))
         )
         lf = _apply_filter(lf, row_filter)
+
+        # ── Check for empty data right after filtering ────────────────────────
+        df_check = lf.collect()
+        if df_check.is_empty():
+            return (
+                f"ERROR: No rows remain after applying the row_filter.\n"
+                f"  row_filter used: '{row_filter}'\n"
+                f"  Check that the filter matches actual values in the dataset."
+            )
+        lf = df_check.lazy()
 
         # Apply stock filter: keep only max horizon per statement_month
         if metric_type == "stock":
